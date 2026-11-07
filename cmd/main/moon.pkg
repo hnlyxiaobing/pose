@@ -1,0 +1,5 @@
+// import {
+//   "hnlyxiaobing/pose" @lib,
+// }
+
+pkgtype(kind: "executable")
