@@ -1,6 +1,6 @@
 # pose · 设计契约（DESIGN.md）
 
-> Round-1 / 2026-11-06 ｜ 状态：架构与声明可评审，无业务逻辑
+> Round-2 API 冻结轮 / 2026-11-07 ｜ 状态：实现完成、门禁全绿；`PoseBackend` 方法集与 `PoseError` 可见性已冻结
 
 ## 1. 分层位置与职责
 
@@ -25,7 +25,7 @@ yuv::RgbImage ──(组合根 Wire 适配)──► pose::RgbImage
 
 | 类型 | 作用 |
 |---|---|
-| `PoseBackend` | trait：`open(PoseConfig)` / `infer(Bytes)->Bytes` / `close()` / `kind()`，全部 `raise PoseError` |
+| `PoseBackend` | `pub(open)` trait：`open(PoseConfig)` / `infer(Bytes)->Bytes` / `close()` 均 `raise PoseError`，`kind()` 返回 `BackendKind` 不抛错；**方法集已冻结为这四个方法，冻结后增删方法即破坏性变更** |
 | `RgbImage` / `RgbLayout` | 门面侧中性图像值类型（与 `yuv` 同构） |
 | `Landmark { x, y, z, visibility, name }` | 单点；坐标统一为输入图像像素系 |
 | `PoseResult { landmarks, score, frame_id, timestamp_ns, backend }` | 一帧结果 |
@@ -33,7 +33,7 @@ yuv::RgbImage ──(组合根 Wire 适配)──► pose::RgbImage
 | `PoseConfig` | letterbox / 阈值 / NMS / max_poses / mirror_x |
 | `Transform` | letterbox 逆变换参数 |
 | `BackendKind` / `TensorDtype` | 诊断标识与张量类型 |
-| `PoseError` | 区分配置 / 后端 / 解码 / 预算错误 |
+| `PoseError` | `pub(all) suberror`（包外适配器可构造）：区分配置 / 后端 / 解码 / 预算错误 |
 | `FrameId` | `UInt64` 别名 |
 
 ## 4. 错误模型
@@ -42,9 +42,11 @@ yuv::RgbImage ──(组合根 Wire 适配)──► pose::RgbImage
 
 分类意义：配置/输入错误不重试；`BackendFailure` 可重试或降级到另一后端；`BudgetExceeded` 触发帧率降级。错误由组合根映射，不泄漏后端错误类型。
 
+可见性（决策 4 追认）：`PoseError` 为 `pub(all) suberror`，包外后端适配器可直接构造这些错误值向上传播；`pose` 包内仅此一个错误类型，未放宽任何其他错误类型。
+
 ## 5. 资源生命周期
 
-门面侧全部纯值，无句柄。`PoseBackend::open` / `close` 由**实现方**负责后端资源；`detect` 不获取/释放资源，只调用 `infer`。`PoseResult` 只读、可跨线程共享。
+门面侧全部纯值，无句柄。`PoseBackend::open` / `close` 由**实现方**负责后端资源；`detect` 不获取/释放资源，只调用 `infer`。`close` 的幂等语义（统一措辞）：**不会二次释放，重复调用返回明确错误**。本门面无 `detach` 方法（`close` 是唯一资源释放入口）。`PoseResult` 只读、可跨线程共享。
 
 ## 6. 线程 / 并发边界
 
@@ -69,20 +71,20 @@ yuv::RgbImage ──(组合根 Wire 适配)──► pose::RgbImage
 
 ## 9. 可替换性与实现细节不泄漏
 
-上层只看到 `PoseBackend` / `PoseResult`；后端句柄、模型路径、量化格式、引擎版本**全部留在后端模块**。换后端 = 组合根换一个适配器，`detect` 签名不变。MediaPipe 若需异步回调式推理，可在 R4 增加 `infer_async` 而不改 `detect`。
+上层只看到 `PoseBackend` / `PoseResult`；后端句柄、模型路径、量化格式、引擎版本**全部留在后端模块**。换后端 = 组合根换一个适配器，`detect` 签名不变。MediaPipe 若需异步回调式推理而新增 `infer_async`：`PoseBackend` 方法集已冻结为四方法，该新增属**破坏性变更**，须先经主控裁决走破坏性变更流程（`detect` 签名可不变，但会破坏包外既有 trait 实现）。
 
 ## 10. 测试策略
 
 | 层次 | 内容 |
 |---|---|
 | 黑盒 | Mock 后端：固定输入 → 固定关键点；换 Mock 实现不改调用 |
-| 白盒 | letterbox 缩放/填充参数、还原变换、输出解码形状、阈值过滤、NMS |
+| 白盒 | 内部辅助：`letterbox_plan` 缩放/填充参数、f32 小端读写、量化编码、配置校验（NMS 未实现，无覆盖） |
 | 错误路径 | 未 open、配置非法、输入尺寸错、输出形状不符、预算超限 |
-| 门禁 | `moon fmt --check` / `moon check` / `moon test --enable-coverage` / `moon info` |
+| 门禁 | `moon clean` / `moon check --deny-warn` / `moon build` / `moon test` / `moon fmt --check`（`pkg.generated.mbti` 为冻结快照，本轮不运行 `moon info`） |
 
 ## 11. 验收标准（实现轮）
 
-1. 换 TFLite / ONNX / Mock 后端不改上层 API；2. 关键点坐标还原正确；3. 与 Python `tflite-runtime` 数值对齐（后端侧 <1e-4）；4. R4 `--deny-warn` 转绿。
+1. 换 TFLite / ONNX / Mock 后端不改上层 API；2. 关键点坐标还原正确；3. 与 Python `tflite-runtime` 数值对齐（后端侧 <1e-4）；4. `moon check --deny-warn` 转绿（R2 已达成，0 error 0 warning）。
 
 ## 12. 未解决问题 / 待验证假设
 
@@ -92,7 +94,13 @@ yuv::RgbImage ──(组合根 Wire 适配)──► pose::RgbImage
 
 ## 13. 当前状态与 TODO
 
-`pose.mbt` 已写入全部类型、`PoseBackend` trait 与 4 个 `declare` 函数，公开 API 有 `///` 文档注释与 `TODO(实现轮)`。**未实现任何编排/前后处理逻辑**。
+实现完成：`detect` 编排、`letterbox` 前处理、`decode_output` 后处理、`PoseResult::restore` 坐标还原均已实现，30 个测试全过（黑盒 22 + 白盒 8，与 R1 基线一致）。test 包内 `MockBackend` / `AltBackend` 实现 `@pose.PoseBackend`，是「包外可实现」的指针级证据，保留不删。
+
+未实现（留待后续轮 / 组合根职责）：NMS（`nms_threshold` 仅做取值校验，无 NMS 算法）、后端适配器（TFLite / MediaPipe / ONNX，由组合根提供）。
+
+API 冻结（R2）：`PoseBackend` 方法集冻结为 `open` / `infer` / `close` / `kind` 四方法；`PoseError` 追认 `pub(all) suberror`。冻结后增删方法或改动可见性即破坏性变更。
+
+门禁（R2 实跑，全部 exit 0）：`moon clean` · `moon check --deny-warn` · `moon build` · `moon test`（30/30）· `moon fmt --check`。
 
 ## References
 

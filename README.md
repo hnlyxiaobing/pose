@@ -2,7 +2,7 @@
 
 **姿态检测门面 —— 只定义 `PoseBackend` 接口与前后处理，推理后端可插拔。**
 
-> 状态：**Round-1 架构与声明可评审**。已写入数据结构、`PoseBackend` trait 与 `declare` 签名，`moon check` 0 error（4 条预期 `0068` 告警）。**无业务逻辑**。
+> 状态：**Round-2 API 冻结轮（2026-11-07）**。`detect` 编排 / letterbox 前处理 / 输出解码 / 坐标还原均已实现，`moon check --deny-warn` 0 error 0 warning、`moon test` 30/30 全过。`PoseBackend` 方法集与 `PoseError` 可见性已冻结。
 
 ## 定位与为什么存在
 
@@ -23,6 +23,8 @@
 
 `detect(&PoseBackend, RgbImage, PoseConfig, FrameId) -> PoseResult raise PoseError`、`decode_output`、`letterbox`、`PoseResult::restore`。完整签名见 `API.md`。
 
+`PoseBackend`（`pub(open)`）**方法集已冻结为 `open` / `infer` / `close` / `kind` 四个方法，冻结后增删方法即破坏性变更**；`close` 幂等语义：**不会二次释放，重复调用返回明确错误**（本库无 `detach` 方法）。`PoseError` 为 `pub(all) suberror`（包外适配器可构造）。
+
 ## 依赖
 
 - **本轮零依赖**；独立 `moon.mod`，`moon check` 独立通过。
@@ -37,17 +39,20 @@
 
 ## 测试与验收
 
-- **测试策略**：Mock 后端纯 MoonBit 单测（无需 `.so` / 设备）；letterbox 还原参数断言；输出解码形状测试；配置非法 / 后端未 open / 输出解码失败的错误路径；`moon test --enable-coverage`。
-- **验收标准**（实现轮）：换 TFLite / ONNX / Mock 后端不改上层调用；关键点坐标还原到输入图像坐标系正确；R4 `--deny-warn` 转绿。
+- **测试策略**：Mock 后端纯 MoonBit 单测（无需 `.so` / 设备）；letterbox 还原参数断言；输出解码形状测试；配置非法 / 后端未 open / 输出解码失败的错误路径。test 包内 `MockBackend` / `AltBackend` 实现 `@pose.PoseBackend`，兼作「包外可实现」证据。
+- **门禁（R2 实跑，全部 exit 0）**：`moon clean` · `moon check --deny-warn` · `moon build` · `moon test`（30/30 全过）· `moon fmt --check`。
+- **验收标准**（实现轮）：换 TFLite / ONNX / Mock 后端不改上层调用；关键点坐标还原到输入图像坐标系正确；`moon check --deny-warn` 转绿（已达成）。
 
 ## 当前状态 / 本轮产物
 
 | 项 | 状态 |
 |---|---|
-| `pose.mbt` 数据结构 + `PoseBackend` trait + `declare` 签名 | ✅ |
-| `pkg.generated.mbti` API 快照 | ✅ |
-| 编排 / letterbox / 解码 / NMS / 后端适配器 | ❌ 后续轮，`TODO(实现轮)` |
-| `moon check` | ✅ 0 error（4 × `0068`，预期） |
+| `pose.mbt` 数据结构 + `PoseBackend` trait + 实现（detect / letterbox / decode_output / restore） | ✅ |
+| `pkg.generated.mbti` API 快照（与 `pkg.generated.mbti.r1` 逐字节相同，零签名变化） | ✅ |
+| 编排 / letterbox / 解码 / 坐标还原 | ✅ 已实现，30 测试全过 |
+| NMS / 后端适配器 | ❌ NMS 未实现（`nms_threshold` 仅校验）；适配器为组合根职责 |
+| API 冻结（`PoseBackend` 四方法 / `PoseError` `pub(all)`） | ✅ R2 冻结 |
+| 门禁 `moon clean` / `check --deny-warn` / `build` / `test` / `fmt --check` | ✅ 全部 exit 0 |
 
 ## 文档索引
 
