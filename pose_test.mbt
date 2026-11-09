@@ -1327,3 +1327,219 @@ test "detect_multi: 预算超限 / 空输出 / 非整数块 / 非法 nms_thresho
   }
   assert_eq(result_name(r4), "InvalidConfig")
 }
+
+///|
+/// 测试绑定共用的「可 raise」守卫：让声明了 error type 但不实际失败的辅助函数
+/// 保留错误类型（避免 unused_error_type 警告），运行时恒不触发。
+fn tflite_check(ok : Bool) -> Unit raise @pose.PoseError {
+  if !ok {
+    raise @pose.PoseError::BackendFailure("test", "injected")
+  }
+}
+
+///|
+/// 注入式 TFLite 绑定的 no-op open（不实际获取资源）。
+fn tflite_open_ok(_config : @pose.PoseConfig) -> Unit raise @pose.PoseError {
+  tflite_check(true)
+}
+
+///|
+fn tflite_close_ok() -> Unit raise @pose.PoseError {
+  tflite_check(true)
+}
+
+///|
+/// 成功绑定：校验 detect 传入的预处理字节数，并返回 17 点固定输出。
+fn tflite_infer_ok(input : Bytes) -> Bytes raise @pose.PoseError {
+  if input.length() != 192 * 192 * 3 * 4 {
+    raise @pose.PoseError::BackendFailure(
+      "test-engine",
+      "unexpected input length \{input.length()}",
+    )
+  }
+  raw_uniform(17, 0.5, 0.5, 1.0)
+}
+
+///|
+fn tflite_infer_fail(_input : Bytes) -> Bytes raise @pose.PoseError {
+  raise @pose.PoseError::BackendFailure(
+    "tflite-engine", "invoke failed: injected",
+  )
+}
+
+///|
+fn tflite_infer_short(_input : Bytes) -> Bytes raise @pose.PoseError {
+  tflite_check(true)
+  Bytes::make(7, b'\x00')
+}
+
+///|
+fn tflite_binding_ok() -> @pose.TfliteBinding {
+  {
+    open_fn: tflite_open_ok,
+    infer_fn: tflite_infer_ok,
+    close_fn: tflite_close_ok,
+  }
+}
+
+///|
+fn tflite_binding_fail() -> @pose.TfliteBinding {
+  {
+    open_fn: tflite_open_ok,
+    infer_fn: tflite_infer_fail,
+    close_fn: tflite_close_ok,
+  }
+}
+
+///|
+fn tflite_binding_short() -> @pose.TfliteBinding {
+  {
+    open_fn: tflite_open_ok,
+    infer_fn: tflite_infer_short,
+    close_fn: tflite_close_ok,
+  }
+}
+
+///|
+test "TfliteAdapter: 注入 mock 绑定 → open/infer/detect 成功（kind=Tflite）" {
+  let spec = movenet_spec()
+  let config = config_of(spec)
+  let adapter = @pose.TfliteAdapter::new(tflite_binding_ok(), spec)
+  @pose.PoseBackend::open(adapter, config)
+  assert_true(!adapter.used_fallback(), msg="primary binding must be used")
+  let r = capture(() => {
+    @pose.detect(adapter, white_image(200, 100), config, 4UL)
+  })
+  match r {
+    Ok(res) => {
+      assert_eq(res.landmarks.length(), 17)
+      // letterbox: 模型输入 (96,96) → 源图 (100,50)
+      assert_close(res.landmarks[0].x, 100.0)
+      assert_close(res.landmarks[0].y, 50.0)
+      assert_eq(res.frame_id, 4UL)
+      assert_eq(kind_name(res.backend), "Tflite")
+    }
+    Err(e) => abort("unexpected error: " + err_name(e))
+  }
+  @pose.PoseBackend::close(adapter)
+}
+
+///|
+test "TfliteAdapter: 输入字节数不匹配报 ShapeMismatch(expected, actual)" {
+  let spec = movenet_spec()
+  let adapter = @pose.TfliteAdapter::new(tflite_binding_ok(), spec)
+  @pose.PoseBackend::open(adapter, config_of(spec))
+  let r = capture(() => {
+    @pose.PoseBackend::infer(adapter, Bytes::make(10, b'\x00'))
+  })
+  match r {
+    Err(@pose.PoseError::ShapeMismatch(expected, actual)) => {
+      assert_eq(expected, 192 * 192 * 3 * 4)
+      assert_eq(actual, 10)
+    }
+    _ => abort("expected ShapeMismatch")
+  }
+}
+
+///|
+test "TfliteAdapter: 输出字节数不是姿态块整数倍报 ShapeMismatch(block, actual)" {
+  let spec = movenet_spec()
+  let adapter = @pose.TfliteAdapter::new(tflite_binding_short(), spec)
+  @pose.PoseBackend::open(adapter, config_of(spec))
+  let input = Bytes::make(192 * 192 * 3 * 4, b'\x00')
+  let r = capture(() => @pose.PoseBackend::infer(adapter, input))
+  match r {
+    Err(@pose.PoseError::ShapeMismatch(expected, actual)) => {
+      assert_eq(expected, 204)
+      assert_eq(actual, 7)
+    }
+    _ => abort("expected ShapeMismatch")
+  }
+}
+
+///|
+test "TfliteAdapter: 绑定 invoke 失败原样传播 BackendFailure(kind, detail)" {
+  let spec = movenet_spec()
+  let config = config_of(spec)
+  let adapter = @pose.TfliteAdapter::new(tflite_binding_fail(), spec)
+  @pose.PoseBackend::open(adapter, config)
+  let r = capture(() => {
+    @pose.detect(adapter, white_image(200, 100), config, 1UL)
+  })
+  assert_eq(result_name(r), "BackendFailure")
+  match r {
+    Err(@pose.PoseError::BackendFailure(kind, detail)) => {
+      assert_eq(kind, "tflite-engine")
+      assert_eq(detail, "invoke failed: injected")
+    }
+    _ => abort("expected BackendFailure")
+  }
+}
+
+///|
+test "TfliteAdapter: 后端缺失回退（primary=None 用 fallback；两者皆缺报 BackendFailure）" {
+  let spec = movenet_spec()
+  let config = config_of(spec)
+  let adapter = @pose.TfliteAdapter::with_fallback(
+    None,
+    Some(tflite_binding_ok()),
+    spec,
+  )
+  @pose.PoseBackend::open(adapter, config)
+  assert_true(adapter.used_fallback(), msg="fallback must be used")
+  let r = capture(() => {
+    @pose.detect(adapter, white_image(200, 100), config, 9UL)
+  })
+  match r {
+    Ok(res) => {
+      assert_eq(res.landmarks.length(), 17)
+      assert_eq(kind_name(res.backend), "Tflite")
+    }
+    Err(e) => abort("unexpected error: " + err_name(e))
+  }
+  // 两者皆缺：open 报 BackendFailure（后端不可用，由上层决定降级）
+  let missing = @pose.TfliteAdapter::unavailable(spec)
+  let r2 = capture(() => @pose.PoseBackend::open(missing, config))
+  assert_eq(result_name(r2), "BackendFailure")
+  match r2 {
+    Err(@pose.PoseError::BackendFailure(kind, _detail)) =>
+      assert_eq(kind, "tflite")
+    _ => abort("expected BackendFailure")
+  }
+}
+
+///|
+test "TfliteAdapter: 生命周期错误（未 open 调 infer / 重复 open / 重复 close）" {
+  let spec = movenet_spec()
+  let config = config_of(spec)
+  let adapter = @pose.TfliteAdapter::new(tflite_binding_ok(), spec)
+  let input = Bytes::make(192 * 192 * 3 * 4, b'\x00')
+  let r1 = capture(() => @pose.PoseBackend::infer(adapter, input))
+  @pose.PoseBackend::open(adapter, config)
+  let r2 = capture(() => @pose.PoseBackend::open(adapter, config))
+  @pose.PoseBackend::close(adapter)
+  let r3 = capture(() => @pose.PoseBackend::close(adapter))
+  let r4 = capture(() => @pose.PoseBackend::infer(adapter, input))
+  assert_eq(result_name(r1), "BackendNotOpen")
+  assert_eq(result_name(r2), "BackendFailure")
+  assert_eq(result_name(r3), "BackendNotOpen")
+  assert_eq(result_name(r4), "BackendNotOpen")
+}
+
+///|
+test "TfliteAdapter: 畸形 ModelSpec 报 InvalidConfig（不 panic）" {
+  let bad_spec = spec_of(
+    192,
+    192,
+    3,
+    @pose.TensorDtype::Float32,
+    [0.0, 0.0, 0.0],
+    [255.0, 255.0, 255.0],
+    0,
+  )
+  let adapter = @pose.TfliteAdapter::new(tflite_binding_ok(), bad_spec)
+  let r = capture(() => {
+    @pose.PoseBackend::open(adapter, config_of(movenet_spec()))
+  })
+  assert_eq(result_name(r), "InvalidConfig")
+}

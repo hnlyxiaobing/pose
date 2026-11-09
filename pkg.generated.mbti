@@ -129,6 +129,25 @@ pub(all) enum TensorDtype {
   Int32
 }
 
+pub struct TfliteAdapter {
+  // private fields
+}
+pub fn TfliteAdapter::close(Self) -> Unit raise PoseError
+pub fn TfliteAdapter::infer(Self, Bytes) -> Bytes raise PoseError
+pub fn TfliteAdapter::kind(Self) -> BackendKind
+pub fn TfliteAdapter::new(TfliteBinding, ModelSpec) -> Self
+pub fn TfliteAdapter::open(Self, PoseConfig) -> Unit raise PoseError
+pub fn TfliteAdapter::unavailable(ModelSpec) -> Self
+pub fn TfliteAdapter::used_fallback(Self) -> Bool
+pub fn TfliteAdapter::with_fallback(TfliteBinding?, TfliteBinding?, ModelSpec) -> Self
+pub impl PoseBackend for TfliteAdapter
+
+pub(all) struct TfliteBinding {
+  open_fn : (PoseConfig) -> Unit raise PoseError
+  infer_fn : (Bytes) -> Bytes raise PoseError
+  close_fn : () -> Unit raise PoseError
+}
+
 pub(all) struct Transform {
   scale : Double
   pad_x : Int32

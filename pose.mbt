@@ -105,6 +105,163 @@ pub(open) trait PoseBackend {
 }
 
 ///|
+/// 组合根注入的 TFLite 引擎绑定：把门面的无类型字节契约映射到具体引擎调用。
+///
+/// **本库不 import `tflite_ffi`**（ADR-0004）：组合根持有 `tflite_ffi::Interpreter`，
+/// 用三个闭包/函数实现本绑定后注入 `TfliteAdapter`：
+/// - `open(config)` → 加载模型、创建 interpreter（资源由组合根/后端持有）；
+/// - `infer(input)` → `set_input` + `invoke` + `output_raw`，返回输出张量字节；
+/// - `close()` → 释放 interpreter。
+/// 绑定函数抛出的 `PoseError` 会由适配器原样向上传播（如 `BackendFailure`）。
+pub(all) struct TfliteBinding {
+  open_fn : (PoseConfig) -> Unit raise PoseError
+  infer_fn : (Bytes) -> Bytes raise PoseError
+  close_fn : () -> Unit raise PoseError
+}
+
+///|
+/// TFLite 后端适配器骨架（组合根注入绑定，pose 内不出现任何引擎句柄/路径）。
+///
+/// 职责（ADR-0004 风险缓解：「组合根适配器负责校验并以 `ShapeMismatch` 报错」）：
+/// - 生命周期：`open` 校验 `ModelSpec` 并转发给绑定；未 open 调 `infer` 报
+///   `BackendNotOpen`；重复 open / 重复 close 报明确错误（不会二次释放）；
+/// - 输入校验：输入字节数必须等于 `input_width * input_height * input_channels *
+///   dtype_size`，否则 `ShapeMismatch(expected, actual)`；
+/// - 输出校验：输出字节数必须是非零的 `landmark_count * 3 * 4` 整数倍，否则
+///   `ShapeMismatch(block, actual)`；
+/// - **后端缺失回退**：主绑定为 `None` 时使用注入的 fallback 绑定（`used_fallback`
+///   可观测）；两者皆缺则 `BackendFailure("tflite", "backend unavailable...")`。
+///   回退只针对「绑定缺失」（结构性不可用），不掩盖主绑定的运行时调用失败。
+/// - `kind()` 恒为 `BackendKind::Tflite`（诊断标注，不参与调度）。
+pub struct TfliteAdapter {
+  priv primary : TfliteBinding?
+  priv fallback : TfliteBinding?
+  priv spec : ModelSpec
+  priv mut opened : Bool
+  priv mut fallback_used : Bool
+}
+
+///|
+/// 用主绑定构造适配器（正常路径：组合根已拿到真实 `tflite_ffi` 引擎）。
+pub fn TfliteAdapter::new(
+  binding : TfliteBinding,
+  spec : ModelSpec,
+) -> TfliteAdapter {
+  {
+    primary: Some(binding),
+    fallback: None,
+    spec,
+    opened: false,
+    fallback_used: false,
+  }
+}
+
+///|
+/// 无任何绑定（真实库/模型缺失）的适配器：`open` 会报 `BackendFailure`，
+/// 供上层在「后端不可用」时走显式降级（例如换 Mock 或另一后端）。
+pub fn TfliteAdapter::unavailable(spec : ModelSpec) -> TfliteAdapter {
+  { primary: None, fallback: None, spec, opened: false, fallback_used: false, }
+}
+
+///|
+/// 带回退绑定构造适配器：`primary` 为 `None` 时使用 `fallback`（组合根可注入
+/// 「desktop 无 .so 时的 Mock / 另一引擎」），`used_fallback` 记录是否实际用到。
+pub fn TfliteAdapter::with_fallback(
+  primary : TfliteBinding?,
+  fallback : TfliteBinding?,
+  spec : ModelSpec,
+) -> TfliteAdapter {
+  { primary, fallback, spec, opened: false, fallback_used: false, }
+}
+
+///|
+/// 本实例是否使用过回退绑定（诊断/测试用；一旦回退即为 true）。
+pub fn TfliteAdapter::used_fallback(self : TfliteAdapter) -> Bool {
+  self.fallback_used
+}
+
+///|
+/// 选择本次调用使用的绑定：主绑定优先；缺失则回退；两者皆缺报 `BackendFailure`。
+fn TfliteAdapter::select_binding(
+  self : TfliteAdapter,
+) -> TfliteBinding raise PoseError {
+  match self.primary {
+    Some(binding) => binding
+    None =>
+      match self.fallback {
+        Some(binding) => {
+          self.fallback_used = true
+          binding
+        }
+        None =>
+          raise BackendFailure(
+            "tflite", "backend unavailable: no engine binding injected (composition root must inject TfliteBinding or a fallback)",
+          )
+      }
+  }
+}
+
+///|
+/// 模型输入字节数（`input_width * input_height * input_channels * dtype_size`）。
+fn input_byte_len(spec : ModelSpec) -> Int32 {
+  spec.input_width *
+  spec.input_height *
+  spec.input_channels *
+  dtype_size(spec.input_dtype)
+}
+
+///|
+pub impl PoseBackend for TfliteAdapter with fn open(self, config) -> Unit raise PoseError {
+  validate_spec(self.spec)
+  if self.opened {
+    raise BackendFailure("tflite", "backend already open")
+  }
+  let binding = self.select_binding()
+  (binding.open_fn)(config)
+  self.opened = true
+}
+
+///|
+pub impl PoseBackend for TfliteAdapter with fn infer(self, input) -> Bytes raise PoseError {
+  if !self.opened {
+    raise BackendNotOpen("tflite: infer before open")
+  }
+  validate_spec(self.spec)
+  let want = input_byte_len(self.spec)
+  if input.length() != want {
+    raise ShapeMismatch(want, input.length())
+  }
+  let binding = self.select_binding()
+  let output = (binding.infer_fn)(input)
+  let block = self.spec.landmark_count * 3 * 4
+  if output.length() == 0 || output.length() % block != 0 {
+    raise ShapeMismatch(block, output.length())
+  }
+  output
+}
+
+///|
+pub impl PoseBackend for TfliteAdapter with fn close(self) -> Unit raise PoseError {
+  if !self.opened {
+    raise BackendNotOpen("tflite: close called when not open")
+  }
+  let binding = self.select_binding()
+  (binding.close_fn)()
+  self.opened = false
+}
+
+///|
+pub impl PoseBackend for TfliteAdapter with fn kind(_self) -> BackendKind {
+  Tflite
+}
+
+///|
+/// 显式声明把 `PoseBackend` 的方法提升为 `TfliteAdapter` 的常规方法
+/// （MoonBit 对 `pub impl` 的隐式提升已弃用；本声明消除该告警，
+/// 同时让调用方既可写 `adapter.infer(input)`，也可写 `PoseBackend::infer`）。
+pub extend TfliteAdapter with PoseBackend::{open, infer, close, kind}
+
+///|
 /// 姿态错误模型。区分「配置错误 / 后端错误 / 解码错误」，便于上层决定重试还是降级。
 /// 可见性：`pub(all)`，后端适配器（包外）需构造这些错误值向上传播。
 #derive(Debug)
@@ -247,13 +404,9 @@ pub(all) struct StretchTransform {
 }
 
 ///|
-/// 校验 ModelSpec 与 PoseConfig 的参数域（纯函数）。
-/// 配置类错误一律 `InvalidConfig`；均值/方差必须显式给出（长度等于
-/// `input_channels`，`std` 非零且有限），拒绝任何静默默认值。
-fn validate_spec_and_config(
-  spec : ModelSpec,
-  config : PoseConfig,
-) -> Unit raise PoseError {
+/// 校验 ModelSpec 的参数域（纯函数）。后端适配器在 open/infer 前复用本校验，
+/// 保证畸形规格以 `InvalidConfig` 报出而不是在整数除法处 panic。
+fn validate_spec(spec : ModelSpec) -> Unit raise PoseError {
   if spec.input_width <= 0 || spec.input_height <= 0 {
     raise InvalidConfig("ModelSpec input size must be positive")
   }
@@ -275,6 +428,17 @@ fn validate_spec_and_config(
       raise InvalidConfig("ModelSpec std must be finite and non-zero")
     }
   }
+}
+
+///|
+/// 校验 ModelSpec 与 PoseConfig 的参数域（纯函数）。
+/// 配置类错误一律 `InvalidConfig`；均值/方差必须显式给出（长度等于
+/// `input_channels`，`std` 非零且有限），拒绝任何静默默认值。
+fn validate_spec_and_config(
+  spec : ModelSpec,
+  config : PoseConfig,
+) -> Unit raise PoseError {
+  validate_spec(spec)
   if config.pad_value < 0 || config.pad_value > 255 {
     raise InvalidConfig("PoseConfig.pad_value must be in 0..=255")
   }
