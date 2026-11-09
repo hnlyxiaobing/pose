@@ -1,7 +1,7 @@
 # pose · 设计决策记录（DECISIONS.md）
 
 > 本文整合自开发期的架构决策记录，内容已全部自足收录，读者无需访问仓库外任何文件。
-> 每条按「背景 → 决策 → 理由 → 后果」组织；`README.md` / `DESIGN.md` / `API.md` 中的
+> 每条按「背景 → 决策 → 理由 → 后果」组织；`../README.md` / `DESIGN.md` / `API.md` 中的
 > 「见 `DECISIONS.md`」均指向本文对应小节。
 
 ---
@@ -112,7 +112,7 @@ trait object 语法已实测可用。
 ## 决策 3：零跨模块 import；跨模块只走纯值契约，同构值类型各自定义
 
 **背景**。各项目（`pose` / `yuv` / `tflite_ffi` / …）是**独立 MoonBit 模块**，各自持有
-`moon.mod`，不是同一模块内的多个包；任何跨模块 `import` 都会让 `moon check` 因找不到
+`../moon.mod`，不是同一模块内的多个包；任何跨模块 `import` 都会让 `moon check` 因找不到
 依赖而失败。同时 MoonBit 是**名义类型系统**：两个模块里结构完全相同的 `struct` 也不是
 同一类型。若按「相机 → YUV 转换 → 姿态门面 → 推理后端」的字面顺序实现编译期依赖，
 会出现多处循环风险——包括「门面想复用转换库的 `RgbImage` 类型」造成的
@@ -139,7 +139,7 @@ trait object 语法已实测可用。
 - 正面：并行开发、边界中性、可独立检查、无循环依赖。
 - 负面：组合根需要写少量显式适配代码（几个值类型 + 后端适配器）；`YuvFrame` /
   `RgbImage` 在两个模块里各定义一次，存在**结构漂移风险**——靠跨模块契约表 +
-  `moon info` API 快照（`pkg.generated.mbti`）+ 组合根测试守住。
+  `moon info` API 快照（`../pkg.generated.mbti`）+ 组合根测试守住。
 - 被替代方案：① 抽出一个公共 `media-frame` 模块统一值类型（可逆决策：适配代码膨胀时
   再抽，当前收益不抵成本）；② 合并成一个多包模块（破坏既有骨架，禁止）；③ 发布到
   mooncakes.io 后用真实 import（引入版本耦合，不采用）。
@@ -173,7 +173,7 @@ landmarks）。两家模型的前后处理差异大，输出布局不一致。
 **背景**。用户约束「不引入无依据的大型依赖」；且任何 `moon add` 都会引入网络/版本耦合、
 破坏模块可独立 `moon check` 的性质、与决策 3 的零 import 冲突。
 
-**决策**。`pose` 本轮**零依赖**（独立 `moon.mod`，`moon check` 独立通过）；后续轮的后端
+**决策**。`pose` 本轮**零依赖**（独立 `../moon.mod`，`moon check` 独立通过）；后续轮的后端
 适配器在组合根实现，`pose` 自身不引入 `tflite_ffi` / `moon-ort` / MediaPipe 依赖。
 后续新增任何第三方依赖必须**同时**满足五条门槛并在文档留痕：① 用途（明确解决哪层能力，
 且无更小代价替代）；② 许可（SPDX 已核验、与 Apache-2.0 兼容、再分发义务列明）；
@@ -189,7 +189,7 @@ landmarks）。两家模型的前后处理差异大，输出布局不一致。
 
 **背景**。R4 需新增 NMS 姿态去重、Float16 输入编码、stretch 非等比缩放与 TFLite 适配器，但
 `PoseBackend` 方法集、`PoseError` 可见性与既有公开类型（含 `Transform` 的六字段构造式）已冻结；
-`COMPATIBILITY.md` §10 只允许**加法性**新增公开 API。
+`../../COMPATIBILITY.md` §10 只允许**加法性**新增公开 API。
 
 **决策**。
 

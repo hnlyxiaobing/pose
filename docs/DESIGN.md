@@ -109,7 +109,7 @@ yuv::RgbImage ──(组合根纯值适配)──► pose::RgbImage
 
 API 冻结（2026-11-07）：`PoseBackend` 方法集冻结为 `open` / `infer` / `close` / `kind` 四方法；`PoseError` 追认 `pub(all) suberror`。冻结后增删方法或改动可见性即破坏性变更。R4 新增均为加法性：`StretchTransform`、`BoundingBox`、`PoseCandidate`、`TfliteBinding`、`TfliteAdapter` 与对应函数（`letterbox_stretch` / `restore_stretch` / `decode_pose_batch` / `nms` / `detect_multi`），无既有签名改动。
 
-门禁（实跑，全部 exit 0）：`moon clean` · `moon check --deny-warn` · `moon build` · `moon test`（62/62）· `moon fmt --check` · `moon info` + `git diff --exit-code -- pkg.generated.mbti cmd/main/pkg.generated.mbti`（快照已随源码提交）。
+门禁（实跑，全部 exit 0）：`moon clean` · `moon check --deny-warn` · `moon build` · `moon test`（62/62）· `moon fmt --check` · `moon info` + `git diff --exit-code -- ../pkg.generated.mbti ../cmd/main/pkg.generated.mbti`（快照已随源码提交）。
 
 ## References
 

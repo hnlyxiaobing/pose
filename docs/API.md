@@ -1,6 +1,6 @@
 # pose · 公开 API（API.md）
 
-> 与 `pkg.generated.mbti` 一致。R4 增量（2026-11-09）全部为**加法性**新增：无既有签名删除/改名/改参数/改返回类型。
+> 与 `../pkg.generated.mbti` 一致。R4 增量（2026-11-09）全部为**加法性**新增：无既有签名删除/改名/改参数/改返回类型。
 > 全部函数**已实现**，`moon check --deny-warn` 0 error 0 warning，`moon test` 62/62。
 > 错误传播统一 `raise PoseError`；门面无句柄；后端经 `&PoseBackend` 注入（`TfliteAdapter` 的引擎调用由组合根以 `TfliteBinding` 注入，本库不 import 后端）。
 
@@ -55,7 +55,7 @@
 | `kind` | `kind(Self) -> BackendKind` | 诊断标注，不抛错 |
 
 > **方法集已冻结，冻结后增删方法即破坏性变更。** 冻结集为 `open / infer / close / kind` 四个方法；
-> 本库无 `detach` 方法（`close` 即唯一资源释放入口）。包外实现证据见 `pose_test.mbt`
+> 本库无 `detach` 方法（`close` 即唯一资源释放入口）。包外实现证据见 `../pose_test.mbt`
 > （test 包内 `MockBackend` / `AltBackend` 实现 `@pose.PoseBackend`，保留为「包外可实现」指针级证据）。
 
 ## 错误构造速查
@@ -66,7 +66,7 @@
 
 | 后端 | 适配器职责 | 状态 |
 |---|---|---|
-| Mock | 固定输出，纯 MoonBit 测试替身 | ✅ 已实现于 `pose_test.mbt`（test 包内 `MockBackend` / `AltBackend`，包外实现证据） |
+| Mock | 固定输出，纯 MoonBit 测试替身 | ✅ 已实现于 `../pose_test.mbt`（test 包内 `MockBackend` / `AltBackend`，包外实现证据） |
 | TFLite（注入式骨架） | 组合根用 `tflite_ffi::Interpreter` 实现 `TfliteBinding` 的 `open_fn` / `infer_fn` / `close_fn`，注入 `TfliteAdapter`；适配器负责输入/输出尺寸校验、生命周期与缺失回退 | ✅ `TfliteAdapter` + `TfliteBinding` 已实现并有 mock 注入测试；**真实 `tflite_ffi` 绑定未接入**（组合根职责，pose 不 import） |
 | MediaPipe JNI | 版本同锁 + ABI diff 快照 | 后续增强（P2，选型理由见 `DECISIONS.md` 决策 2） |
 | `moon-ort` / ONNX | 第二后端 | 备选（P2，本轮不引入） |
@@ -77,7 +77,7 @@
 
 ## 状态
 
-门禁（实跑，全部 exit 0）：`moon clean` · `moon check --deny-warn`（0 error 0 warning）· `moon build` · `moon test`（62/62 全过）· `moon fmt --check` · `moon info` + `git diff --exit-code -- pkg.generated.mbti cmd/main/pkg.generated.mbti`。
-API 快照：`pkg.generated.mbti`（R4 变更全部为加法性新增并已随源码提交）。
+门禁（实跑，全部 exit 0）：`moon clean` · `moon check --deny-warn`（0 error 0 warning）· `moon build` · `moon test`（62/62 全过）· `moon fmt --check` · `moon info` + `git diff --exit-code -- ../pkg.generated.mbti ../cmd/main/pkg.generated.mbti`。
+API 快照：`../pkg.generated.mbti`（R4 变更全部为加法性新增并已随源码提交）。
 实现：✅ `detect` / `detect_multi` / `letterbox` / `letterbox_stretch` / `decode_output` / `decode_pose_batch` / `nms` / `restore` / `restore_stretch` / `TfliteAdapter`。
 冻结项：`PoseBackend` 方法集（`open` / `infer` / `close` / `kind` 四方法）与 `PoseError` 可见性（`pub(all) suberror`）——冻结后增删方法或改动可见性即破坏性变更。
