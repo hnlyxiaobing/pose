@@ -351,7 +351,9 @@ test "detect: 配置非法报 InvalidConfig（不触达后端）" {
   let spec = movenet_spec()
   let base = config_of(spec)
   let zero_poses = config_with(base, spec, true, 0, 0.0, 0, false)
-  let stretch = config_with(base, spec, false, 0, 0.0, 1, false)
+  // keep_aspect_ratio=false 现已支持（stretch）；这里改用越界的 score_threshold
+  // 继续覆盖「配置非法不触达后端」路径，stretch 成功路径见 stretch 专项测试。
+  let bad_threshold = config_with(base, spec, true, 0, 2.0, 1, false)
   let zero_std = config_with(
     base,
     spec_of(
@@ -372,7 +374,9 @@ test "detect: 配置非法报 InvalidConfig（不触达后端）" {
   let r1 = capture(() => {
     @pose.detect(mock, white_image(200, 100), zero_poses, 1UL)
   })
-  let r2 = capture(() => @pose.detect(mock, white_image(200, 100), stretch, 1UL))
+  let r2 = capture(() => {
+    @pose.detect(mock, white_image(200, 100), bad_threshold, 1UL)
+  })
   let r3 = capture(() => {
     @pose.detect(mock, white_image(200, 100), zero_std, 1UL)
   })
@@ -925,4 +929,230 @@ test "restore: Transform 非法报 InvalidConfig / InvalidInput" {
   let r2 = capture(() => res.restore(bad_size))
   assert_eq(result_name(r1), "InvalidConfig")
   assert_eq(result_name(r2), "InvalidInput")
+}
+
+///|
+test "letterbox_stretch: 非等比拉伸无填充 + StretchTransform 比例" {
+  // 源 4×2 → 模型 2×4：scale_x=0.5、scale_y=2.0，整幅输出无 pad
+  let data = Bytes::from_array([
+    b'\x0a', b'\x14', b'\x1e', b'\x28', b'\x32', b'\x3c', b'\x46', b'\x50', b'\x5a',
+    b'\x64', b'\x6e', b'\x78', b'\x01', b'\x02', b'\x03', b'\x04', b'\x05', b'\x06',
+    b'\x07', b'\x08', b'\x09', b'\x0a', b'\x0b', b'\x0c',
+  ])
+  let image : @pose.RgbImage = {
+    width: 4,
+    height: 2,
+    layout: @pose.RgbLayout::Rgb,
+    data,
+    timestamp_ns: 0UL,
+  }
+  let spec = spec_of(
+    2,
+    4,
+    3,
+    @pose.TensorDtype::UInt8,
+    [0.0, 0.0, 0.0],
+    [1.0, 1.0, 1.0],
+    3,
+  )
+  let config = config_with(config_of(spec), spec, false, 7, 0.0, 1, false)
+  let r = capture(() => @pose.letterbox_stretch(image, config))
+  match r {
+    Ok((bytes, t)) => {
+      assert_eq(bytes.length(), 2 * 4 * 3)
+      assert_close(t.scale_x, 0.5)
+      assert_close(t.scale_y, 2.0)
+      assert_eq(t.source_width, 4)
+      assert_eq(t.source_height, 2)
+      assert_true(!t.mirrored)
+      // 第 0 行：源 (0,0)=(10,20,30)、(2,0)=(70,80,90)
+      assert_eq(bytes[0].to_int(), 10)
+      assert_eq(bytes[5].to_int(), 90)
+      // 第 1 行与第 0 行相同（sy = 1*2/4 = 0）
+      assert_eq(bytes[6].to_int(), 10)
+      assert_eq(bytes[11].to_int(), 90)
+      // 第 2 行：源 (0,1)=(1,2,3)、(2,1)=(7,8,9)
+      assert_eq(bytes[12].to_int(), 1)
+      assert_eq(bytes[17].to_int(), 9)
+      // 第 3 行与第 2 行相同
+      assert_eq(bytes[18].to_int(), 1)
+      // 无填充：pad_value=7 不应出现在首像素
+      assert_eq(bytes[0].to_int() != 7, true)
+    }
+    Err(e) => abort("unexpected error: " + err_name(e))
+  }
+}
+
+///|
+test "letterbox_stretch: mirror_x 水平翻转采样" {
+  let image : @pose.RgbImage = {
+    width: 2,
+    height: 1,
+    layout: @pose.RgbLayout::Rgb,
+    data: Bytes::from_array([
+      b'\x0a', b'\x14', b'\x1e', b'\x28', b'\x32', b'\x3c',
+    ]),
+    timestamp_ns: 0UL,
+  }
+  let spec = spec_of(
+    2,
+    1,
+    3,
+    @pose.TensorDtype::UInt8,
+    [0.0, 0.0, 0.0],
+    [1.0, 1.0, 1.0],
+    3,
+  )
+  let config = config_with(config_of(spec), spec, false, 0, 0.0, 1, true)
+  let r = capture(() => @pose.letterbox_stretch(image, config))
+  match r {
+    Ok((bytes, t)) => {
+      assert_true(t.mirrored)
+      assert_eq(bytes[0].to_int(), 40)
+      assert_eq(bytes[3].to_int(), 10)
+    }
+    Err(e) => abort("unexpected error: " + err_name(e))
+  }
+}
+
+///|
+test "detect: stretch 模式按 x/y 独立比例还原坐标" {
+  let mock = mock_of(raw_uniform(17, 0.25, 0.25, 1.0), @pose.BackendKind::Mock)
+  let spec = movenet_spec()
+  let config = config_with(config_of(spec), spec, false, 0, 0.0, 1, false)
+  @pose.PoseBackend::open(mock, config)
+  let r = capture(() => @pose.detect(mock, white_image(200, 100), config, 3UL))
+  match r {
+    Ok(res) => {
+      // 模型输入像素 (48, 48)；scale_x=192/200=0.96、scale_y=192/100=1.92
+      assert_close(res.landmarks[0].x, 50.0)
+      assert_close(res.landmarks[0].y, 25.0)
+      assert_close(res.score, 1.0)
+      assert_eq(res.frame_id, 3UL)
+      assert_eq(kind_name(res.backend), "Mock")
+      assert_eq(mock.seen_input_len, 192 * 192 * 3 * 4)
+    }
+    Err(e) => abort("unexpected error: " + err_name(e))
+  }
+}
+
+///|
+test "restore_stretch: 坐标还原 / 镜像 / 错误路径" {
+  let lm : @pose.Landmark = {
+    x: 50.0,
+    y: 50.0,
+    z: 0.25,
+    visibility: 0.8,
+    name: None,
+  }
+  let res : @pose.PoseResult = {
+    landmarks: [lm],
+    score: 0.8,
+    frame_id: 3UL,
+    timestamp_ns: 9UL,
+    backend: @pose.BackendKind::Mock,
+  }
+  let t : @pose.StretchTransform = {
+    scale_x: 0.5,
+    scale_y: 0.25,
+    source_width: 200,
+    source_height: 100,
+    mirrored: false,
+  }
+  let tm : @pose.StretchTransform = {
+    scale_x: 0.5,
+    scale_y: 0.25,
+    source_width: 200,
+    source_height: 100,
+    mirrored: true,
+  }
+  let r1 = capture(() => res.restore_stretch(t))
+  let r2 = capture(() => res.restore_stretch(tm))
+  match (r1, r2) {
+    (Ok(a), Ok(b)) => {
+      // x = 50/0.5 = 100；y = 50/0.25 = 200
+      assert_close(a.landmarks[0].x, 100.0)
+      assert_close(a.landmarks[0].y, 200.0)
+      assert_close(a.landmarks[0].z, 0.25)
+      assert_close(a.landmarks[0].visibility, 0.8)
+      // 镜像还原 x = 200 - 1 - 100 = 99
+      assert_close(b.landmarks[0].x, 99.0)
+      assert_close(b.landmarks[0].y, 200.0)
+      // 纯函数：输入不变
+      assert_close(res.landmarks[0].x, 50.0)
+    }
+    _ => abort("restore_stretch must succeed")
+  }
+  let bad_scale : @pose.StretchTransform = {
+    scale_x: 0.0,
+    scale_y: 1.0,
+    source_width: 10,
+    source_height: 10,
+    mirrored: false,
+  }
+  let nan_scale : @pose.StretchTransform = {
+    scale_x: 1.0,
+    scale_y: Float::reinterpret_from_int(0x7FC00000).to_double(),
+    source_width: 10,
+    source_height: 10,
+    mirrored: false,
+  }
+  let bad_size : @pose.StretchTransform = {
+    scale_x: 1.0,
+    scale_y: 1.0,
+    source_width: 0,
+    source_height: 10,
+    mirrored: false,
+  }
+  assert_eq(
+    result_name(capture(() => res.restore_stretch(bad_scale))),
+    "InvalidConfig",
+  )
+  assert_eq(
+    result_name(capture(() => res.restore_stretch(nan_scale))),
+    "InvalidConfig",
+  )
+  assert_eq(
+    result_name(capture(() => res.restore_stretch(bad_size))),
+    "InvalidInput",
+  )
+}
+
+///|
+test "letterbox_stretch: 模式/输入/通道错误路径" {
+  let spec = spec_of(
+    2,
+    2,
+    3,
+    @pose.TensorDtype::UInt8,
+    [0.0, 0.0, 0.0],
+    [1.0, 1.0, 1.0],
+    3,
+  )
+  let good = white_image(2, 2)
+  let aspect = config_with(config_of(spec), spec, true, 0, 0.0, 1, false)
+  let r1 = capture(() => @pose.letterbox_stretch(good, aspect))
+  let bad : @pose.RgbImage = {
+    width: 2,
+    height: 2,
+    layout: @pose.RgbLayout::Rgb,
+    data: Bytes::make(3, b'\x00'),
+    timestamp_ns: 0UL,
+  }
+  let stretch = config_with(config_of(spec), spec, false, 0, 0.0, 1, false)
+  let r2 = capture(() => @pose.letterbox_stretch(bad, stretch))
+  let ch4_spec = spec_of(
+    2,
+    2,
+    4,
+    @pose.TensorDtype::UInt8,
+    [0.0, 0.0, 0.0, 0.0],
+    [1.0, 1.0, 1.0, 1.0],
+    3,
+  )
+  let ch4 = config_with(config_of(ch4_spec), ch4_spec, false, 0, 0.0, 1, false)
+  let r3 = capture(() => @pose.letterbox_stretch(good, ch4))
+  assert_eq(result_name(r1), "InvalidConfig")
+  assert_eq(result_name(r2), "InvalidInput")
+  assert_eq(result_name(r3), "UnsupportedModel")
 }

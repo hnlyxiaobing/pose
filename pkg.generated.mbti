@@ -12,6 +12,8 @@ pub fn detect(&PoseBackend, RgbImage, PoseConfig, UInt64) -> PoseResult raise Po
 
 pub fn letterbox(RgbImage, PoseConfig) -> (Bytes, Transform) raise PoseError
 
+pub fn letterbox_stretch(RgbImage, PoseConfig) -> (Bytes, StretchTransform) raise PoseError
+
 // Errors
 #derive(@debug.Debug)
 pub(all) suberror PoseError {
@@ -72,6 +74,7 @@ pub(all) struct PoseResult {
   backend : BackendKind
 }
 pub fn PoseResult::restore(Self, Transform) -> Self raise PoseError
+pub fn PoseResult::restore_stretch(Self, StretchTransform) -> Self raise PoseError
 
 pub(all) struct RgbImage {
   width : Int32
@@ -86,6 +89,14 @@ pub(all) enum RgbLayout {
   Bgr
   Rgba
   Bgra
+}
+
+pub(all) struct StretchTransform {
+  scale_x : Double
+  scale_y : Double
+  source_width : Int32
+  source_height : Int32
+  mirrored : Bool
 }
 
 pub(all) enum TensorDtype {

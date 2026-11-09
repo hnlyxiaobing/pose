@@ -138,6 +138,19 @@ pub(all) struct Transform {
 }
 
 ///|
+/// stretch（非等比缩放）的逆变换参数：x / y 各自比例、无填充。
+///
+/// 与 `Transform` 并存而不改其字段，是为了满足 API 冻结语义中的「只允许加法性
+/// 新增」：`Transform` 的构造式（六个字段）保持不变，旧调用方无需改动。
+pub(all) struct StretchTransform {
+  scale_x : Double
+  scale_y : Double
+  source_width : Int32
+  source_height : Int32
+  mirrored : Bool
+}
+
+///|
 /// 校验 ModelSpec 与 PoseConfig 的参数域（纯函数）。
 /// 配置类错误一律 `InvalidConfig`；均值/方差必须显式给出（长度等于
 /// `input_channels`，`std` 非零且有限），拒绝任何静默默认值。
@@ -181,11 +194,6 @@ fn validate_spec_and_config(
   }
   if config.max_poses <= 0 {
     raise InvalidConfig("PoseConfig.max_poses must be positive")
-  }
-  if !config.keep_aspect_ratio {
-    raise InvalidConfig(
-      "PoseConfig.keep_aspect_ratio must be true: stretch resize is not representable by Transform",
-    )
   }
 }
 
@@ -370,53 +378,51 @@ fn encode_value(
 }
 
 ///|
-/// 前处理：按比例缩放并填充到模型输入尺寸，返回预处理字节与还原参数。
-///
-/// - 等比缩放：`scale = min(tw/w, th/h)`，缩放区居中，四周填 `pad_value`（像素值，
-///   与像素同样经过 `(pixel - mean) / std` 归一化后按 `input_dtype` 编码，小端）。
-/// - `mirror_x` 为真时水平翻转采样（`x' = width - 1 - x`），并记录到
-///   `Transform.mirrored`，由 `PoseResult::restore` 还原。
-/// - 错误：配置/规格非法 `InvalidConfig`；尺寸与数据长度不符 `InvalidInput(w, h)`；
-///   仅支持 3 通道模型输入，其余 `UnsupportedModel`。
-/// - dtype：Float32 / Float16 / UInt8 / Int8 / Int32 全部支持（Float16 按
-///   round-to-nearest-even 编码，NaN → 0x7E00、溢出 → ±Inf，见 `f32_to_f16_bits`）。
-pub fn letterbox(
-  image : RgbImage,
-  config : PoseConfig,
-) -> (Bytes, Transform) raise PoseError {
-  let spec = config.model
-  validate_spec_and_config(spec, config)
-  if spec.input_channels != 3 {
-    raise UnsupportedModel("letterbox: only 3-channel model input is supported")
-  }
-  let w = image.width
-  let h = image.height
-  if w <= 0 || h <= 0 {
-    raise InvalidInput(w, h)
-  }
-  let src_ch = layout_channels(image.layout)
-  if image.data.length() != w * h * src_ch {
-    raise InvalidInput(w, h)
-  }
-  let tw = spec.input_width
-  let th = spec.input_height
-  let (scale, scaled_w, scaled_h, pad_x, pad_y) = letterbox_plan(w, h, tw, th)
-  let elem = match spec.input_dtype {
+/// 每个输入元素的字节数（`Float32`/`Int32` 为 4，`Float16` 为 2，8 位类型为 1）。
+fn dtype_size(dtype : TensorDtype) -> Int32 {
+  match dtype {
     Float32 => 4
     Float16 => 2
     UInt8 => 1
     Int8 => 1
     Int32 => 4
   }
+}
+
+///|
+/// 缩放计划：采样所需的缩放区尺寸与填充。x / y 比例由缩放区尺寸隐式决定
+/// （`scale_x = scaled_w / w`、`scale_y = scaled_h / h`），此处不重复存储。
+priv struct ResizePlan {
+  scaled_w : Int32
+  scaled_h : Int32
+  pad_x : Int32
+  pad_y : Int32
+}
+
+///|
+/// 按缩放计划采样 + 归一化 + 按 dtype 编码，返回模型输入字节。
+/// 采样约定与既有 letterbox 一致：`sx = (tx - pad_x) * w / scaled_w`（整数下取整），
+/// `mirror_x` 时 `sx' = w - 1 - sx`；填充区写入 `pad_value` 并经同一归一化。
+fn resize_encode(
+  image : RgbImage,
+  config : PoseConfig,
+  plan : ResizePlan,
+) -> Bytes {
+  let spec = config.model
+  let tw = spec.input_width
+  let th = spec.input_height
+  let w = image.width
+  let h = image.height
+  let elem = dtype_size(spec.input_dtype)
   let out = FixedArray::make(tw * th * 3 * elem, b'\x00')
   for ty in 0..<th {
     for tx in 0..<tw {
-      let pixel = if tx >= pad_x &&
-        tx < pad_x + scaled_w &&
-        ty >= pad_y &&
-        ty < pad_y + scaled_h {
-        let sx0 = (tx - pad_x) * w / scaled_w
-        let sy = (ty - pad_y) * h / scaled_h
+      let pixel = if tx >= plan.pad_x &&
+        tx < plan.pad_x + plan.scaled_w &&
+        ty >= plan.pad_y &&
+        ty < plan.pad_y + plan.scaled_h {
+        let sx0 = (tx - plan.pad_x) * w / plan.scaled_w
+        let sy = (ty - plan.pad_y) * h / plan.scaled_h
         let sx = if config.mirror_x { w - 1 - sx0 } else { sx0 }
         read_rgb(image, sx, sy)
       } else {
@@ -435,6 +441,55 @@ pub fn letterbox(
       }
     }
   }
+  Bytes::from_array(out)
+}
+
+///|
+/// 前处理：按比例缩放并填充到模型输入尺寸，返回预处理字节与还原参数。
+///
+/// - 等比缩放：`scale = min(tw/w, th/h)`，缩放区居中，四周填 `pad_value`（像素值，
+///   与像素同样经过 `(pixel - mean) / std` 归一化后按 `input_dtype` 编码，小端）。
+/// - `mirror_x` 为真时水平翻转采样（`x' = width - 1 - x`），并记录到
+///   `Transform.mirrored`，由 `PoseResult::restore` 还原。
+/// - 本函数只承载等比（letterbox）模式；`keep_aspect_ratio = false` 时返回的
+///   单 `scale` `Transform` 无法表达非等比逆变换，故报 `InvalidConfig`，
+///   请改用 `letterbox_stretch`（或直接 `detect`，由它按配置分派）。
+/// - 错误：配置/规格非法 `InvalidConfig`；尺寸与数据长度不符 `InvalidInput(w, h)`；
+///   仅支持 3 通道模型输入，其余 `UnsupportedModel`。
+/// - dtype：Float32 / Float16 / UInt8 / Int8 / Int32 全部支持（Float16 按
+///   round-to-nearest-even 编码，NaN → 0x7E00、溢出 → ±Inf，见 `f32_to_f16_bits`）。
+pub fn letterbox(
+  image : RgbImage,
+  config : PoseConfig,
+) -> (Bytes, Transform) raise PoseError {
+  let spec = config.model
+  validate_spec_and_config(spec, config)
+  if !config.keep_aspect_ratio {
+    raise InvalidConfig(
+      "letterbox: keep_aspect_ratio=false is not representable by Transform; use letterbox_stretch",
+    )
+  }
+  if spec.input_channels != 3 {
+    raise UnsupportedModel("letterbox: only 3-channel model input is supported")
+  }
+  let w = image.width
+  let h = image.height
+  if w <= 0 || h <= 0 {
+    raise InvalidInput(w, h)
+  }
+  let src_ch = layout_channels(image.layout)
+  if image.data.length() != w * h * src_ch {
+    raise InvalidInput(w, h)
+  }
+  let tw = spec.input_width
+  let th = spec.input_height
+  let (scale, scaled_w, scaled_h, pad_x, pad_y) = letterbox_plan(w, h, tw, th)
+  let bytes = resize_encode(image, config, ResizePlan::{
+    scaled_w,
+    scaled_h,
+    pad_x,
+    pad_y,
+  })
   let t = Transform::{
     scale,
     pad_x,
@@ -443,7 +498,62 @@ pub fn letterbox(
     source_height: h,
     mirrored: config.mirror_x,
   }
-  (Bytes::from_array(out), t)
+  (bytes, t)
+}
+
+///|
+/// 前处理（stretch 模式）：把整幅源图非等比拉伸到模型输入尺寸，无填充。
+///
+/// - `scale_x = tw / w`、`scale_y = th / h`，采样 `sx = tx * w / tw`、
+///   `sy = ty * h / th`（整数下取整），整幅输出都是图像内容，`pad_value` 不参与。
+/// - `mirror_x` 语义与 `letterbox` 一致；逆变换由 `PoseResult::restore_stretch` 完成。
+/// - 适用场景：模型训练时即非等比拉伸（MoveNet 等多数模型推荐 letterbox，但
+///   部分自定义模型/数据管线使用直接 resize），需要与训练侧前处理严格一致时。
+/// - 错误：`keep_aspect_ratio = true` 时 `InvalidConfig`（应改用 `letterbox`）；
+///   其余同 `letterbox`（`InvalidInput` / `UnsupportedModel`）。
+pub fn letterbox_stretch(
+  image : RgbImage,
+  config : PoseConfig,
+) -> (Bytes, StretchTransform) raise PoseError {
+  let spec = config.model
+  validate_spec_and_config(spec, config)
+  if config.keep_aspect_ratio {
+    raise InvalidConfig(
+      "letterbox_stretch: keep_aspect_ratio must be false (use letterbox for aspect-preserving resize)",
+    )
+  }
+  if spec.input_channels != 3 {
+    raise UnsupportedModel(
+      "letterbox_stretch: only 3-channel model input is supported",
+    )
+  }
+  let w = image.width
+  let h = image.height
+  if w <= 0 || h <= 0 {
+    raise InvalidInput(w, h)
+  }
+  let src_ch = layout_channels(image.layout)
+  if image.data.length() != w * h * src_ch {
+    raise InvalidInput(w, h)
+  }
+  let tw = spec.input_width
+  let th = spec.input_height
+  let scale_x = tw.to_double() / w.to_double()
+  let scale_y = th.to_double() / h.to_double()
+  let bytes = resize_encode(image, config, ResizePlan::{
+    scaled_w: tw,
+    scaled_h: th,
+    pad_x: 0,
+    pad_y: 0,
+  })
+  let t = StretchTransform::{
+    scale_x,
+    scale_y,
+    source_width: w,
+    source_height: h,
+    mirrored: config.mirror_x,
+  }
+  (bytes, t)
 }
 
 ///|
@@ -526,9 +636,68 @@ pub fn PoseResult::restore(
 }
 
 ///|
-/// 编排一帧的检测：输入 RGB → letterbox/归一化 → 后端推理 → 关键点解码 → 坐标还原。
+/// 把关键点从模型输入坐标系还原到原始图像坐标系（stretch 模式）。
+///
+/// - `x = x / scale_x`、`y = y / scale_y`（stretch 无填充）；
+///   `t.mirrored` 为真时再做水平翻转 `x = source_width - 1 - x`（像素索引约定）。
+/// - 纯函数：不修改输入，返回新结果；不夹取坐标。
+/// - 错误：`scale_x`/`scale_y` 非正（含 NaN）`InvalidConfig`；source 尺寸非法 `InvalidInput`。
+pub fn PoseResult::restore_stretch(
+  self : PoseResult,
+  t : StretchTransform,
+) -> PoseResult raise PoseError {
+  if !(t.scale_x > 0.0) || !(t.scale_y > 0.0) {
+    raise InvalidConfig("StretchTransform scale_x/scale_y must be positive")
+  }
+  if t.source_width <= 0 || t.source_height <= 0 {
+    raise InvalidInput(t.source_width, t.source_height)
+  }
+  let w = t.source_width.to_double()
+  let landmarks = self.landmarks.map(fn(l) {
+    let x0 = l.x / t.scale_x
+    let y0 = l.y / t.scale_y
+    let x = if t.mirrored { w - 1.0 - x0 } else { x0 }
+    Landmark::{ x, y: y0, z: l.z, visibility: l.visibility, name: l.name, }
+  })
+  PoseResult::{
+    landmarks,
+    score: self.score,
+    frame_id: self.frame_id,
+    timestamp_ns: self.timestamp_ns,
+    backend: self.backend,
+  }
+}
+
+///|
+/// 前处理结果携带的逆变换参数（按 `keep_aspect_ratio` 分派两种模式）。
+priv enum ResizeTransform {
+  Aspect(Transform)
+  Stretch(StretchTransform)
+}
+
+///|
+/// 前处理分派：等比 → `letterbox` + `Transform`；非等比 → `letterbox_stretch`
+/// + `StretchTransform`。`detect` 用同一分派保证「前处理 ↔ 坐标还原」成对一致。
+fn preprocess(
+  image : RgbImage,
+  config : PoseConfig,
+) -> (Bytes, ResizeTransform) raise PoseError {
+  if config.keep_aspect_ratio {
+    let (bytes, t) = letterbox(image, config)
+    (bytes, Aspect(t))
+  } else {
+    let (bytes, t) = letterbox_stretch(image, config)
+    (bytes, Stretch(t))
+  }
+}
+
+///|
+/// 编排一帧的检测：输入 RGB → letterbox/stretch 缩放与归一化 → 后端推理 →
+/// 关键点解码 → 坐标还原。
 ///
 /// - 参数：`backend` 为 trait object，由组合根注入；`image`/`config` 只读纯值。
+/// - 缩放：`keep_aspect_ratio = true` 走等比 letterbox（`Transform` 还原）；为
+///   false 走 stretch 非等比拉伸（`StretchTransform` 还原），两者坐标反变换均正确。
 /// - 返回：`PoseResult` 纯值（坐标已还原到输入图像像素系）；`score` 为保留关键点
 ///   `visibility` 的均值（无保留关键点时为 0）；`timestamp_ns` 取自图像；
 ///   `backend` 为 `backend.kind()` 标注。
@@ -545,7 +714,7 @@ pub fn detect(
   config : PoseConfig,
   frame_id : FrameId,
 ) -> PoseResult raise PoseError {
-  let (input, t) = letterbox(image, config)
+  let (input, plan) = preprocess(image, config)
   let raw = backend.infer(input)
   // 预算控制：输出张量携带的姿态块数不得超过 max_poses（单姿态布局为 1 块）。
   let block = config.model.landmark_count * 3 * 4
@@ -573,5 +742,8 @@ pub fn detect(
     timestamp_ns: image.timestamp_ns,
     backend: backend.kind(),
   }
-  result.restore(t)
+  match plan {
+    Aspect(t) => result.restore(t)
+    Stretch(t) => result.restore_stretch(t)
+  }
 }
