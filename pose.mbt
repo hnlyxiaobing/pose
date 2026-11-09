@@ -1,9 +1,9 @@
 ///|
 /// 姿态检测门面（facade）：类型、`PoseBackend` trait 与编排/前后处理实现。
 ///
-/// 契约决策（见 docs/adr/ADR-0004）：门面拥有 `PoseBackend` trait 与中性值类型，
+/// 契约决策（见 DECISIONS.md）：门面拥有 `PoseBackend` trait 与中性值类型，
 /// 后端（tflite_ffi / MediaPipe / ONNX）**不依赖本库**，由组合根提供适配器实现 trait。
-/// 由此消除「门面→后端、后端→门面」的循环，换后端不换上层 API。
+/// 由此消除「门面→后端、后端→门面」的潜在循环依赖，换后端不换上层 API。
 /// 本文件实现 detect 编排、letterbox 前处理、decode_output 后处理与坐标还原；
 /// **不实现推理引擎**，不 import 任何后端模块。
 
@@ -96,7 +96,7 @@ pub(all) struct PoseConfig {
 /// - `infer` 是纯调用，不持有相机、不持有渲染状态；
 /// - 后端自有资源的获取/释放在 `open` / `close` 中完成，错误以 `PoseError` 传播；
 /// - 实现不得向上层暴露具体引擎类型（TFLite / MediaPipe 句柄等）。
-/// 可见性：`pub(open)`，组合根（包外）可实现本 trait 注入后端（ADR-0004）。
+/// 可见性：`pub(open)`，组合根（包外）可实现本 trait 注入后端（见 DECISIONS.md）。
 pub(open) trait PoseBackend {
   fn open(Self, PoseConfig) -> Unit raise PoseError
   fn infer(Self, Bytes) -> Bytes raise PoseError
@@ -469,7 +469,7 @@ pub fn PoseResult::restore(
 ///   超过 `max_poses` 姿态块预算 `BudgetExceeded`（触发帧率降级）；解码错误
 ///   `OutputDecode` / `ShapeMismatch`。
 /// - 资源：`detect` 不获取/释放资源，只调用 `infer`；门面无可变状态，
-///   并发约束由 `PoseBackend` 实现声明（见各后端 DESIGN.md）。
+///   并发约束由 `PoseBackend` 实现声明（见各后端自身文档）。
 /// - 非目标：不取帧、不做 YUV 转换、不渲染、不实现推理引擎、不管理模型文件下载。
 pub fn detect(
   backend : &PoseBackend,

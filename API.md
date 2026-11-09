@@ -1,6 +1,6 @@
 # pose · 公开 API（API.md）
 
-> 与 `pkg.generated.mbti` 一致（与 R1 快照 `pkg.generated.mbti.r1` 逐字节相同，冻结前零签名变化）。
+> 与 `pkg.generated.mbti` 一致（与前一轮 API 快照逐字节相同，冻结前零签名变化）。
 > 全部函数**已实现**，`moon check --deny-warn` 0 error 0 warning（原 4 条 `0068` 随实现落地而消失）。
 > 错误传播统一 `raise PoseError`；门面无句柄；后端经 `&PoseBackend` 注入。
 
@@ -51,9 +51,9 @@
 | 后端 | 适配器职责 | 状态 |
 |---|---|---|
 | Mock | 固定输出，纯 MoonBit 测试替身 | ✅ 已实现于 `pose_test.mbt`（test 包内 `MockBackend` / `AltBackend`，包外实现证据） |
-| `tflite_ffi` | `infer(Bytes)` → `set_input` / `invoke` / `output_raw` | W1 |
-| MediaPipe JNI | 版本同锁 + ABI diff 快照 | R4（ADR-0008） |
-| `moon-ort` / ONNX | 第二后端 | R4，本轮不引入 |
+| `tflite_ffi` | `infer(Bytes)` → `set_input` / `invoke` / `output_raw` | 后续接入（组合根实现） |
+| MediaPipe JNI | 版本同锁 + ABI diff 快照 | 后续增强（选型理由见 `DECISIONS.md` 决策 2） |
+| `moon-ort` / ONNX | 第二后端 | 备选，本轮不引入 |
 
 ## 非目标
 
@@ -61,6 +61,6 @@
 
 ## 状态
 
-门禁（R2 实跑，全部 exit 0）：`moon clean` · `moon check --deny-warn`（0 error 0 warning）· `moon build` · `moon test`（30/30 全过）· `moon fmt --check`。
-API 快照：`pkg.generated.mbti`（与 `pkg.generated.mbti.r1` 逐字节相同，零签名变化）。实现：✅ `detect` / `letterbox` / `decode_output` / `PoseResult::restore`。
+门禁（实跑，全部 exit 0）：`moon clean` · `moon check --deny-warn`（0 error 0 warning）· `moon build` · `moon test`（30/30 全过）· `moon fmt --check`。
+API 快照：`pkg.generated.mbti`（与前一轮 API 快照逐字节相同，零签名变化）。实现：✅ `detect` / `letterbox` / `decode_output` / `PoseResult::restore`。
 冻结项：`PoseBackend` 方法集（`open` / `infer` / `close` / `kind` 四方法）与 `PoseError` 可见性（`pub(all) suberror`）——冻结后增删方法或改动可见性即破坏性变更。
