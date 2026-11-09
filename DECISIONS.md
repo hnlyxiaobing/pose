@@ -185,6 +185,41 @@ landmarks）。两家模型的前后处理差异大，输出布局不一致。
 
 ---
 
+## 决策 6：R4 增量在 API 冻结语义下的落地方式（NMS / Float16 / stretch / TfliteAdapter）
+
+**背景**。R4 需新增 NMS 姿态去重、Float16 输入编码、stretch 非等比缩放与 TFLite 适配器，但
+`PoseBackend` 方法集、`PoseError` 可见性与既有公开类型（含 `Transform` 的六字段构造式）已冻结；
+`COMPATIBILITY.md` §10 只允许**加法性**新增公开 API。
+
+**决策**。
+
+1. **全部为加法性新增**：`BoundingBox` / `PoseCandidate` / `nms` / `decode_pose_batch` /
+   `detect_multi`；`StretchTransform` / `letterbox_stretch` / `PoseResult::restore_stretch`；
+   `TfliteBinding` / `TfliteAdapter`。既有签名零改动，`detect` / `letterbox` / `decode_output` /
+   `restore` / `Transform` / `PoseConfig` 字段均保持原样。
+2. **stretch 用并行类型而非给 `Transform` 加字段**：单 `scale` 无法表达 x/y 独立比例；给
+   `pub(all) struct Transform` 加字段会破坏包外六字段构造式（测试中也大量使用）。故新增
+   `StretchTransform`，由 `detect` 内部的 `preprocess` 按 `keep_aspect_ratio` 成对分派
+   「前处理 ↔ 还原」。`letterbox` 对 stretch 配置显式报 `InvalidConfig` 并指向新 API。
+3. **NMS 会话/中间值**：`decode_pose_batch` 按 `landmark_count * 3 * 4` 字节切块，`PoseCandidate`
+   携带过滤后关键点、均值 score 与 bbox；`nms` 按 score 降序**稳定**排序后贪心，IoU **严格大于**
+   阈值才抑制，空输入返回空。`detect` 委托 `detect_multi` 并返回最高分姿态，保持单结果签名与
+   `score` 既有语义（保留关键点 visibility 均值）。
+4. **TfliteAdapter 不违反 ADR-0004**：pose 仍**不 import `tflite_ffi`**、不持有引擎句柄/路径。
+   ADR-0004 的「组合根写适配器」收敛为「组合根注入 `TfliteBinding` 三个字节级回调」，门面提供
+   可复用的尺寸校验（`ShapeMismatch`）、生命周期错误与「绑定缺失 → 回退绑定」骨架；真实
+   interpreter 的创建/调用仍在组合根与后端模块内。
+5. **Float16**：`f32_to_f16_bits` 按 round-to-nearest-ties-to-even 转换，NaN 折叠为 `0x7E00`、
+   ±Inf 保号、溢出饱和、`2^-25` 下溢为带符号零、f16 次正规区间正常编码；`letterbox` 对
+   `Float16` 不再拒绝（原 `UnsupportedModel` 行为按新特性移除，属行为变更、非签名变更）。
+
+**后果**。正面：冻结语义与「零跨模块 import」同时保持；新增能力可独立测试（合成张量 + mock
+注入，无 `.so`/模型）。负面：本决策增加了并行类型与函数，API 面变大；`letterbox` 与
+`letterbox_stretch` 需调用方按 `keep_aspect_ratio` 选择。风险：NMS 阈值/bbox 仅在合成张量上
+验证，真实 MoveNet 输出上的阈值标定 `[仍需实测]`；真实 `tflite_ffi` 绑定未接入。
+
+---
+
 ## 附：开发顺序结论（背景补充）
 
 早期路线图把姿态门面排在相机之后的第二阶段，且「取帧 → 姿态推理 → 电视渲染」的闭环
