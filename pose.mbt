@@ -280,21 +280,92 @@ fn read_f32_le(b : Bytes, off : Int32) -> Double {
 }
 
 ///|
+/// 把 IEEE 754 binary32 舍入为 binary16 的位模式（不含字节序，返回 16 位值）。
+///
+/// - 舍入：round-to-nearest-ties-to-even（就近舍入、平局取偶）。
+/// - NaN：一律折叠为规范 quiet NaN `0x7E00`（不保留符号/负载）。
+/// - Infinity：`0x7C00` / `0xFC00`（带符号）。
+/// - 溢出（|v| 超过 f16 最大值 65504 且舍入到 2^16）：饱和为带符号 Infinity。
+/// - 次正规：f16 次正规区间 `[2^-24, 2^-14)` 正常编码；`2^-25` 恰好是
+///   「最小次正规的一半」，按平局取偶舍入为 0；小于 `2^-25` 的 f32 值
+///   （含全部 f32 次正规数与 ±0）一律为带符号零。
+fn f32_to_f16_bits(f : Float) -> Int32 {
+  let bits = f.reinterpret_as_int()
+  let sign = (bits >> 16) & 0x8000
+  let exp = (bits >> 23) & 0xFF
+  let mant = bits & 0x7FFFFF
+  if exp == 0xFF {
+    // NaN / Infinity
+    if mant != 0 {
+      0x7E00
+    } else {
+      sign | 0x7C00
+    }
+  } else if exp == 0 {
+    // f32 ±0 与 f32 次正规数均远小于 f16 最小次正规数的一半
+    sign
+  } else {
+    let e = exp - 127
+    if e > 15 {
+      // 超出 f16 最大指数：饱和为 Infinity
+      sign | 0x7C00
+    } else if e >= -14 {
+      // f16 正规数：保留 10 位尾数，按 RNE 舍入
+      let m10 = mant >> 13
+      let rem = mant & 0x1FFF
+      let mut m = m10
+      if rem > 0x1000 || (rem == 0x1000 && (m10 & 1) == 1) {
+        m = m + 1
+      }
+      // m 进位到 1024 时会自然加进指数域；指数域满 31 即溢出为 Infinity
+      let h = ((e + 15) << 10) + m
+      if h >= 0x7C00 {
+        sign | 0x7C00
+      } else {
+        sign | h
+      }
+    } else if e >= -25 {
+      // f16 次正规数（含 e = -25 这个「最小次正规的一半」边界）：
+      // 24 位有效数右移后在 2^-24 网格上按 RNE 舍入（进位到 0x0400 即最小正规数）
+      let n = 0x800000 + mant
+      let shift = -e - 1
+      let m = n >> shift
+      let half = 1 << (shift - 1)
+      let rem = n & ((1 << shift) - 1)
+      let mut h = m
+      if rem > half || (rem == half && (m & 1) == 1) {
+        h = h + 1
+      }
+      sign | h
+    } else {
+      // 小于 2^-25：舍入为带符号零
+      sign
+    }
+  }
+}
+
+///|
+/// 小端写入 IEEE 754 Float16（由 Double 先转 f32，再按 RNE 舍入到 f16）。
+fn write_f16_le(out : FixedArray[Byte], off : Int32, v : Double) -> Unit {
+  let bits = f32_to_f16_bits(Float::from_double(v))
+  out[off] = (bits & 0xFF).to_byte()
+  out[off + 1] = ((bits >> 8) & 0xFF).to_byte()
+}
+
+///|
 /// 把归一化值按 dtype 量化并写入输出缓冲（小端）。
-/// Float16 编码不在本轮范围，以 `UnsupportedModel` 显式拒绝。
 fn encode_value(
   out : FixedArray[Byte],
   off : Int32,
   v : Double,
   dtype : TensorDtype,
-) -> Unit raise PoseError {
+) -> Unit {
   match dtype {
     Float32 => write_f32_le(out, off, v)
+    Float16 => write_f16_le(out, off, v)
     UInt8 => out[off] = clamp_round_int(v, 0, 255).to_byte()
     Int8 => out[off] = (clamp_round_int(v, -128, 127) & 0xFF).to_byte()
     Int32 => write_i32_le(out, off, clamp_round_int(v, -2147483648, 2147483647))
-    Float16 =>
-      raise UnsupportedModel("letterbox: Float16 input dtype is not supported")
   }
 }
 
@@ -306,7 +377,9 @@ fn encode_value(
 /// - `mirror_x` 为真时水平翻转采样（`x' = width - 1 - x`），并记录到
 ///   `Transform.mirrored`，由 `PoseResult::restore` 还原。
 /// - 错误：配置/规格非法 `InvalidConfig`；尺寸与数据长度不符 `InvalidInput(w, h)`；
-///   仅支持 3 通道模型输入与 Float32/UInt8/Int8/Int32，其余 `UnsupportedModel`。
+///   仅支持 3 通道模型输入，其余 `UnsupportedModel`。
+/// - dtype：Float32 / Float16 / UInt8 / Int8 / Int32 全部支持（Float16 按
+///   round-to-nearest-even 编码，NaN → 0x7E00、溢出 → ±Inf，见 `f32_to_f16_bits`）。
 pub fn letterbox(
   image : RgbImage,
   config : PoseConfig,
@@ -315,11 +388,6 @@ pub fn letterbox(
   validate_spec_and_config(spec, config)
   if spec.input_channels != 3 {
     raise UnsupportedModel("letterbox: only 3-channel model input is supported")
-  }
-  match spec.input_dtype {
-    Float16 =>
-      raise UnsupportedModel("letterbox: Float16 input dtype is not supported")
-    _ => ()
   }
   let w = image.width
   let h = image.height

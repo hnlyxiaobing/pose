@@ -75,7 +75,7 @@ test "clamp_round_int: 四舍五入与夹取" {
 }
 
 ///|
-test "encode_value: UInt8 夹取 / Int8 补码 / Int32 小端 / Float16 显式拒绝" {
+test "encode_value: UInt8 夹取 / Int8 补码 / Int32 小端 / Float16 小端编码" {
   let buf = FixedArray::make(8, b'\x00')
   encode_value(buf, 0, 300.0, UInt8)
   assert_eq(buf[0].to_int(), 255)
@@ -88,14 +88,10 @@ test "encode_value: UInt8 夹取 / Int8 补码 / Int32 小端 / Float16 显式�
   assert_eq(buf[1].to_int(), 0)
   assert_eq(buf[2].to_int(), 0)
   assert_eq(buf[3].to_int(), 0)
-  let r = try {
-    encode_value(buf, 0, 0.5, Float16)
-    false
-  } catch {
-    UnsupportedModel(_) => true
-    _ => false
-  }
-  assert_true(r, msg="Float16 must raise UnsupportedModel")
+  // Float16 1.0 = 0x3C00，小端 00 3C
+  encode_value(buf, 0, 1.0, Float16)
+  assert_eq(buf[0].to_int(), 0x00)
+  assert_eq(buf[1].to_int(), 0x3C)
 }
 
 ///|
@@ -152,4 +148,76 @@ test "validate_spec_and_config: std 为 0 / 阈值越界 / pad_value 越界报 I
     _ => false
   }
   assert_true(r3, msg="nms_threshold out of range must raise InvalidConfig")
+}
+
+///|
+/// f32 → f16 位模式助手（白盒：直接测内部转换函数）。
+fn f16_bits_of(v : Double) -> Int32 {
+  f32_to_f16_bits(Float::from_double(v))
+}
+
+///|
+test "f32→f16: 正规数已知位模式（±0 / ±1 / 0.5 / 2 / 1024 / 65504）" {
+  assert_eq(f16_bits_of(0.0), 0x0000)
+  assert_eq(f16_bits_of(-0.0), 0x8000)
+  assert_eq(f16_bits_of(1.0), 0x3C00)
+  assert_eq(f16_bits_of(-1.0), 0xBC00)
+  assert_eq(f16_bits_of(0.5), 0x3800)
+  assert_eq(f16_bits_of(2.0), 0x4000)
+  assert_eq(f16_bits_of(1024.0), 0x6400)
+  assert_eq(f16_bits_of(65504.0), 0x7BFF)
+  assert_eq(f16_bits_of(0.0999755859375), 0x2E66)
+  assert_eq(f16_bits_of(1.0 / 3.0), 0x3555)
+}
+
+///|
+test "f32→f16: NaN 折叠为 0x7E00、±Inf 保号、溢出饱和" {
+  let nan = Float::reinterpret_from_int(0x7FC00000).to_double()
+  let neg_nan = Float::reinterpret_from_int(0xFFC00000).to_double()
+  let inf = Float::reinterpret_from_int(0x7F800000).to_double()
+  let neg_inf = Float::reinterpret_from_int(0xFF800000).to_double()
+  assert_eq(f16_bits_of(nan), 0x7E00)
+  assert_eq(f16_bits_of(neg_nan), 0x7E00)
+  assert_eq(f16_bits_of(inf), 0x7C00)
+  assert_eq(f16_bits_of(neg_inf), 0xFC00)
+  assert_eq(f16_bits_of(70000.0), 0x7C00)
+  assert_eq(f16_bits_of(-70000.0), 0xFC00)
+  assert_eq(f16_bits_of(1.0e9), 0x7C00)
+  // 65520 恰在 65504 与 2^16 之间：尾数全 1 为奇数 → RNE 进位到 Inf
+  assert_eq(f16_bits_of(65520.0), 0x7C00)
+}
+
+///|
+test "f32→f16: 次正规数边界（2^-24 / 2^-23 / 2^-15 / 2^-14）" {
+  assert_eq(f16_bits_of(0.00000005960464477539063), 0x0001) // 2^-24
+  assert_eq(f16_bits_of(0.00000011920928955078125), 0x0002) // 2^-23
+  assert_eq(f16_bits_of(-0.00000005960464477539063), 0x8001) // -2^-24
+  assert_eq(f16_bits_of(0.000030517578125), 0x0200) // 2^-15
+  assert_eq(f16_bits_of(0.00006103515625), 0x0400) // 2^-14 → 最小正规数
+}
+
+///|
+test "f32→f16: 下溢为带符号零（2^-25 平局取偶）" {
+  // 2^-25 是最小次正规数的一半：平局取偶 → +0 / -0
+  assert_eq(f16_bits_of(0.000000029802322387695313), 0x0000)
+  assert_eq(f16_bits_of(-0.000000029802322387695313), 0x8000)
+  // 略大于 2^-25 → 最小次正规数
+  assert_eq(f16_bits_of(0.00000003), 0x0001)
+  // 3×2^-25 = 1.5 个次正规 ulp：平局取偶 → 0x0002
+  assert_eq(f16_bits_of(0.00000008940696716308594), 0x0002)
+  // 远小于半 ulp 与 f32 次正规数 → 0
+  assert_eq(f16_bits_of(1.0e-8), 0x0000)
+  assert_eq(f16_bits_of(Float::reinterpret_from_int(1).to_double()), 0x0000)
+}
+
+///|
+test "f32→f16: round-to-nearest-ties-to-even 边界" {
+  // 1 + 2^-10 精确可表示
+  assert_eq(f16_bits_of(1.0009765625), 0x3C01)
+  // 1 + 2^-11 恰为 0x3C00 与 0x3C01 的中点：取偶 → 0x3C00
+  assert_eq(f16_bits_of(1.00048828125), 0x3C00)
+  // 1 + 3×2^-11 恰为 0x3C01 与 0x3C02 的中点：取偶 → 0x3C02
+  assert_eq(f16_bits_of(1.00146484375), 0x3C02)
+  // 1 + 5×2^-11 恰为 0x3C02 与 0x3C03 的中点：取偶 → 0x3C02
+  assert_eq(f16_bits_of(1.00244140625), 0x3C02)
 }

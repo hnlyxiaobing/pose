@@ -747,7 +747,7 @@ test "letterbox: Float32 归一化编码 (pixel - mean) / std" {
 }
 
 ///|
-test "letterbox: 错误路径（数据长度 / keep_aspect_ratio / Float16 / 非 3 通道）" {
+test "letterbox: 错误路径（数据长度 / stretch 由 letterbox_stretch 承担 / 非 3 通道）" {
   let spec = spec_of(
     2,
     2,
@@ -789,9 +789,51 @@ test "letterbox: 错误路径（数据长度 / keep_aspect_ratio / Float16 / 非
   )
   let r4 = capture(() => @pose.letterbox(good, config_of(ch4_spec)))
   assert_eq(result_name(r1), "InvalidInput")
+  // 旧的 letterbox 返回单 scale 的 Transform，无法表达非等比缩放；stretch 由
+  // letterbox_stretch / detect 承担（见 stretch 专项测试）。
   assert_eq(result_name(r2), "InvalidConfig")
-  assert_eq(result_name(r3), "UnsupportedModel")
+  // Float16 已被支持：255 → f16 0x5BF8，小端 F8 5B
+  match r3 {
+    Ok((bytes, t)) => {
+      assert_eq(bytes.length(), 2 * 2 * 3 * 2)
+      assert_eq(t.scale, 1.0)
+      assert_eq(bytes[0].to_int(), 0xF8)
+      assert_eq(bytes[1].to_int(), 0x5B)
+    }
+    Err(e) => abort("Float16 letterbox must succeed: " + err_name(e))
+  }
   assert_eq(result_name(r4), "UnsupportedModel")
+}
+
+///|
+test "letterbox: Float16 归一化编码（1.0 → 0x3C00，小端 00 3C）" {
+  let image : @pose.RgbImage = {
+    width: 1,
+    height: 1,
+    layout: @pose.RgbLayout::Rgb,
+    data: Bytes::from_array([b'\xff', b'\xff', b'\xff']),
+    timestamp_ns: 0UL,
+  }
+  let spec = spec_of(
+    1,
+    1,
+    3,
+    @pose.TensorDtype::Float16,
+    [0.0, 0.0, 0.0],
+    [255.0, 255.0, 255.0],
+    3,
+  )
+  let r = capture(() => @pose.letterbox(image, config_of(spec)))
+  match r {
+    Ok((bytes, _t)) => {
+      assert_eq(bytes.length(), 6)
+      for c in 0..<3 {
+        assert_eq(bytes[c * 2].to_int(), 0x00)
+        assert_eq(bytes[c * 2 + 1].to_int(), 0x3C)
+      }
+    }
+    Err(e) => abort("unexpected error: " + err_name(e))
+  }
 }
 
 ///|
