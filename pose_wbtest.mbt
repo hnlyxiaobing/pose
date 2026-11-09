@@ -398,3 +398,43 @@ test "nms: 非法阈值 / 非法 max_poses 报 InvalidConfig" {
     msg="negative max_poses must be rejected",
   )
 }
+
+///|
+test "validate_spec: 超大输入/关键点数报 InvalidConfig（Int32 溢出防护）" {
+  let huge_input : ModelSpec = {
+    input_width: 100000,
+    input_height: 100000,
+    input_channels: 3,
+    input_dtype: Float32,
+    mean: [0.0, 0.0, 0.0],
+    std: [1.0, 1.0, 1.0],
+    landmark_count: 17,
+    output_tensor_index: 0,
+  }
+  let huge_landmarks : ModelSpec = {
+    input_width: 192,
+    input_height: 192,
+    input_channels: 3,
+    input_dtype: Float32,
+    mean: [0.0, 0.0, 0.0],
+    std: [1.0, 1.0, 1.0],
+    landmark_count: 2000000,
+    output_tensor_index: 0,
+  }
+  let r1 = try {
+    validate_spec(huge_input)
+    false
+  } catch {
+    InvalidConfig(_) => true
+    _ => false
+  }
+  let r2 = try {
+    validate_spec(huge_landmarks)
+    false
+  } catch {
+    InvalidConfig(_) => true
+    _ => false
+  }
+  assert_true(r1, msg="oversized input tensor must be rejected")
+  assert_true(r2, msg="oversized landmark_count must be rejected")
+}

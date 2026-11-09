@@ -416,6 +416,19 @@ fn validate_spec(spec : ModelSpec) -> Unit raise PoseError {
   if spec.input_channels <= 0 {
     raise InvalidConfig("ModelSpec.input_channels must be positive")
   }
+  // 上界校验：防止畸形 spec 在 `input_width * input_height * channels * dtype_size`
+  // 或 `landmark_count * 3 * 4` 处发生 Int32 溢出（可能得到 0 / 负数，进而在
+  // 整数除法或缓冲区分配处 panic）。真实姿态模型的输入远小于这些上界。
+  if spec.landmark_count > 1000000 {
+    raise InvalidConfig("ModelSpec.landmark_count is too large (max 1000000)")
+  }
+  let input_bytes = spec.input_width.to_int64() *
+    spec.input_height.to_int64() *
+    spec.input_channels.to_int64() *
+    dtype_size(spec.input_dtype).to_int64()
+  if input_bytes > 268435456L {
+    raise InvalidConfig("ModelSpec input tensor exceeds 256 MiB")
+  }
   if spec.mean.length() != spec.input_channels ||
     spec.std.length() != spec.input_channels {
     raise InvalidConfig("ModelSpec mean/std must have input_channels entries")
