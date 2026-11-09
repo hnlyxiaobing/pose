@@ -107,7 +107,7 @@ pub(open) trait PoseBackend {
 ///|
 /// 组合根注入的 TFLite 引擎绑定：把门面的无类型字节契约映射到具体引擎调用。
 ///
-/// **本库不 import `tflite_ffi`**（ADR-0004）：组合根持有 `tflite_ffi::Interpreter`，
+/// **本库不 import `tflite_ffi`**：组合根持有 `tflite_ffi::Interpreter`，
 /// 用三个闭包/函数实现本绑定后注入 `TfliteAdapter`：
 /// - `open(config)` → 加载模型、创建 interpreter（资源由组合根/后端持有）；
 /// - `infer(input)` → `set_input` + `invoke` + `output_raw`，返回输出张量字节；
@@ -122,7 +122,7 @@ pub(all) struct TfliteBinding {
 ///|
 /// TFLite 后端适配器骨架（组合根注入绑定，pose 内不出现任何引擎句柄/路径）。
 ///
-/// 职责（ADR-0004 风险缓解：「组合根适配器负责校验并以 `ShapeMismatch` 报错」）：
+/// 职责（本仓库风险缓解：「组合根适配器负责校验并以 `ShapeMismatch` 报错」）：
 /// - 生命周期：`open` 校验 `ModelSpec` 并转发给绑定；未 open 调 `infer` 报
 ///   `BackendNotOpen`；重复 open / 重复 close 报明确错误（不会二次释放）；
 /// - 输入校验：输入字节数必须等于 `input_width * input_height * input_channels *

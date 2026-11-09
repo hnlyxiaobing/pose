@@ -1,6 +1,6 @@
 # pose · 设计决策记录（DECISIONS.md）
 
-> 本文整合自开发期的架构决策记录，内容已全部自足收录，读者无需访问仓库外任何文件。
+> 本文记录本库的架构设计决策，内容已全部自足收录，读者无需访问仓库外任何文件。
 > 每条按「背景 → 决策 → 理由 → 后果」组织；`../README.md` / `DESIGN.md` / `API.md` 中的
 > 「见 `DECISIONS.md`」均指向本文对应小节。
 
@@ -189,7 +189,7 @@ landmarks）。两家模型的前后处理差异大，输出布局不一致。
 
 **背景**。R4 需新增 NMS 姿态去重、Float16 输入编码、stretch 非等比缩放与 TFLite 适配器，但
 `PoseBackend` 方法集、`PoseError` 可见性与既有公开类型（含 `Transform` 的六字段构造式）已冻结；
-`../../COMPATIBILITY.md` §10 只允许**加法性**新增公开 API。
+本仓库 API 冻结约定只允许**加法性**新增公开 API：既有签名变更即破坏性变更；新增须同步 `pkg.generated.mbti` 快照、在 `docs/API.md` 登记并经 CI 快照门禁校验。
 
 **决策**。
 
@@ -205,8 +205,8 @@ landmarks）。两家模型的前后处理差异大，输出布局不一致。
    携带过滤后关键点、均值 score 与 bbox；`nms` 按 score 降序**稳定**排序后贪心，IoU **严格大于**
    阈值才抑制，空输入返回空。`detect` 委托 `detect_multi` 并返回最高分姿态，保持单结果签名与
    `score` 既有语义（保留关键点 visibility 均值）。
-4. **TfliteAdapter 不违反 ADR-0004**：pose 仍**不 import `tflite_ffi`**、不持有引擎句柄/路径。
-   ADR-0004 的「组合根写适配器」收敛为「组合根注入 `TfliteBinding` 三个字节级回调」，门面提供
+4. **TfliteAdapter 不违反门面持有 trait 决策**：pose 仍**不 import `tflite_ffi`**、不持有引擎句柄/路径。
+   「组合根写适配器」收敛为「组合根注入 `TfliteBinding` 三个字节级回调」，门面提供
    可复用的尺寸校验（`ShapeMismatch`）、生命周期错误与「绑定缺失 → 回退绑定」骨架；真实
    interpreter 的创建/调用仍在组合根与后端模块内。
 5. **Float16**：`f32_to_f16_bits` 按 round-to-nearest-ties-to-even 转换，NaN 折叠为 `0x7E00`、
