@@ -127,6 +127,102 @@ pub extend PoseError with Debug::{to_repr}
 pub type FrameId = UInt64
 
 ///|
+/// 轴对齐包围盒（模型输入像素坐标系），由姿态关键点导出，仅用于 NMS 去重。
+pub(all) struct BoundingBox {
+  x1 : Double
+  y1 : Double
+  x2 : Double
+  y2 : Double
+}
+
+///|
+/// 包围盒面积；退化盒（`x2 <= x1` 或 `y2 <= y1`）面积为 0。
+pub fn BoundingBox::area(self : BoundingBox) -> Double {
+  let w = self.x2 - self.x1
+  let h = self.y2 - self.y1
+  if w <= 0.0 || h <= 0.0 {
+    0.0
+  } else {
+    w * h
+  }
+}
+
+///|
+/// 两个包围盒的 IoU（交并比，范围 `[0, 1]`；并集面积为 0 时返回 0）。
+pub fn BoundingBox::iou(self : BoundingBox, other : BoundingBox) -> Double {
+  let ix1 = if self.x1 > other.x1 { self.x1 } else { other.x1 }
+  let iy1 = if self.y1 > other.y1 { self.y1 } else { other.y1 }
+  let ix2 = if self.x2 < other.x2 { self.x2 } else { other.x2 }
+  let iy2 = if self.y2 < other.y2 { self.y2 } else { other.y2 }
+  let iw = ix2 - ix1
+  let ih = iy2 - iy1
+  if iw <= 0.0 || ih <= 0.0 {
+    0.0
+  } else {
+    let inter = iw * ih
+    let union = self.area() + other.area() - inter
+    if union <= 0.0 {
+      0.0
+    } else {
+      inter / union
+    }
+  }
+}
+
+///|
+/// 单姿态候选：关键点（已按 `score_threshold` 过滤）、置信度与包围盒。
+///
+/// - `score` = `landmarks` 的 `visibility` 均值（空数组为 0），用于 NMS 排序；
+/// - `bbox` = `landmarks` 的轴对齐包围盒（空数组为零盒），仅用于 IoU 去重，
+///   不进入 `PoseResult`；
+/// - 该类型是 `decode_pose_batch` 与 `nms` 之间的中性中间值，包外也可直接构造
+///   以复用 NMS（例如自定义后处理）。
+pub(all) struct PoseCandidate {
+  landmarks : Array[Landmark]
+  score : Double
+  bbox : BoundingBox
+}
+
+///|
+/// 由关键点构造候选：`score` 取 visibility 均值，`bbox` 取关键点轴对齐包围盒。
+pub fn PoseCandidate::new(landmarks : Array[Landmark]) -> PoseCandidate {
+  let n = landmarks.length()
+  if n == 0 {
+    PoseCandidate::{
+      landmarks,
+      score: 0.0,
+      bbox: { x1: 0.0, y1: 0.0, x2: 0.0, y2: 0.0, },
+    }
+  } else {
+    let mut x1 = landmarks[0].x
+    let mut y1 = landmarks[0].y
+    let mut x2 = landmarks[0].x
+    let mut y2 = landmarks[0].y
+    let mut total = 0.0
+    for l in landmarks {
+      if l.x < x1 {
+        x1 = l.x
+      }
+      if l.y < y1 {
+        y1 = l.y
+      }
+      if l.x > x2 {
+        x2 = l.x
+      }
+      if l.y > y2 {
+        y2 = l.y
+      }
+      total = total + l.visibility
+    }
+    PoseCandidate::{
+      landmarks,
+      score: total / n.to_double(),
+      bbox: { x1, y1, x2, y2, },
+    }
+  }
+}
+
+///|
 /// letterbox 的逆变换参数，用于把归一化坐标还原到输入图像坐标系。
 pub(all) struct Transform {
   scale : Double
@@ -557,7 +653,50 @@ pub fn letterbox_stretch(
 }
 
 ///|
-/// 后处理：把后端原始输出张量字节解码为关键点数组。
+/// 解码一个姿态块（`landmark_count` 个 `(y, x, score)` Float32 三元组），
+/// 不做阈值过滤；`base` 为该块在输出张量中的起始字节偏移。
+fn decode_block(
+  raw : Bytes,
+  base : Int32,
+  spec : ModelSpec,
+) -> Array[Landmark] raise PoseError {
+  let out : Array[Landmark] = []
+  for i in 0..<spec.landmark_count {
+    let off = base + i * 12
+    let y_norm = read_f32_le(raw, off)
+    let x_norm = read_f32_le(raw, off + 4)
+    let score = read_f32_le(raw, off + 8)
+    if !(y_norm.is_finite() && x_norm.is_finite() && score.is_finite()) {
+      raise OutputDecode("decode: non-finite value in output tensor")
+    }
+    out.push(Landmark::{
+      x: x_norm * spec.input_width.to_double(),
+      y: y_norm * spec.input_height.to_double(),
+      z: 0.0,
+      visibility: score,
+      name: None,
+    })
+  }
+  out
+}
+
+///|
+/// 按 `score_threshold` 保序过滤关键点（`score < threshold` 剔除），返回新数组。
+fn filter_landmarks(
+  landmarks : Array[Landmark],
+  threshold : Double,
+) -> Array[Landmark] {
+  let out : Array[Landmark] = []
+  for l in landmarks {
+    if l.visibility >= threshold {
+      out.push(l)
+    }
+  }
+  out
+}
+
+///|
+/// 后处理：把后端原始输出张量字节解码为关键点数组（单姿态）。
 ///
 /// - 布局：`[landmark_count, 3]` 的 Float32（小端）三元组 `(y, x, score)`，
 ///   坐标为相对模型输入尺寸的归一化值（MoveNet `输出 [1,1,17,3]` 的 17 点布局；
@@ -565,6 +704,7 @@ pub fn letterbox_stretch(
 /// - `x = x_norm * input_width`、`y = y_norm * input_height`（模型输入像素系），
 ///   `z = 0`（2D 模型无深度），`visibility = score`，`name = None`（张量无名称）。
 /// - 阈值过滤：`score < config.score_threshold` 的关键点被剔除。
+/// - 多姿态输出请用 `decode_pose_batch`（本函数要求恰好一个姿态块的字节数）。
 /// - 错误：规格/配置非法 `InvalidConfig`；空张量或非有限数值 `OutputDecode`；
 ///   字节数与 `landmark_count * 3 * 4` 不符 `ShapeMismatch(expected, actual)`。
 pub fn decode_output(
@@ -580,26 +720,89 @@ pub fn decode_output(
   if raw.length() != block {
     raise ShapeMismatch(block, raw.length())
   }
-  let out : Array[Landmark] = []
-  for i in 0..<spec.landmark_count {
-    let base = i * 12
-    let y_norm = read_f32_le(raw, base)
-    let x_norm = read_f32_le(raw, base + 4)
-    let score = read_f32_le(raw, base + 8)
-    if !(y_norm.is_finite() && x_norm.is_finite() && score.is_finite()) {
-      raise OutputDecode("decode_output: non-finite value in output tensor")
-    }
-    if score >= config.score_threshold {
-      out.push(Landmark::{
-        x: x_norm * spec.input_width.to_double(),
-        y: y_norm * spec.input_height.to_double(),
-        z: 0.0,
-        visibility: score,
-        name: None,
-      })
-    }
+  filter_landmarks(decode_block(raw, 0, spec), config.score_threshold)
+}
+
+///|
+/// 后处理（多姿态）：把输出张量按 `landmark_count * 3 * 4` 字节切分为姿态块，
+/// 逐块解码、阈值过滤后构造 `PoseCandidate` 数组。
+///
+/// - 每个候选的 `score` 与 `bbox` 均基于**过滤后**保留的关键点计算，与
+///   `PoseResult.score` 的既有语义（保留关键点 visibility 均值）一致。
+/// - 错误：规格/配置非法 `InvalidConfig`；空张量或非有限数值 `OutputDecode`；
+///   字节数不是姿态块整数倍 `ShapeMismatch(block, raw.length())`。
+/// - 预算（`max_poses`）由编排层 `detect_multi` 在调用本函数前检查。
+pub fn decode_pose_batch(
+  raw : Bytes,
+  spec : ModelSpec,
+  config : PoseConfig,
+) -> Array[PoseCandidate] raise PoseError {
+  validate_spec_and_config(spec, config)
+  let block = spec.landmark_count * 3 * 4
+  if raw.length() == 0 {
+    raise OutputDecode("decode_pose_batch: empty output tensor")
+  }
+  if raw.length() % block != 0 {
+    raise ShapeMismatch(block, raw.length())
+  }
+  let count = raw.length() / block
+  let out : Array[PoseCandidate] = []
+  for b in 0..<count {
+    let all = decode_block(raw, b * block, spec)
+    out.push(PoseCandidate::new(filter_landmarks(all, config.score_threshold)))
   }
   out
+}
+
+///|
+/// 姿态级非极大值抑制（NMS）：按 `score` 降序贪心保留，若候选与任一已保留候选的
+/// bbox IoU **严格大于** `iou_threshold` 则抑制；最多保留 `max_poses` 个。
+///
+/// - 空输入返回空数组（不报错）；同分候选保持输入顺序（稳定插入排序）；
+/// - 阈值边界：`IoU == threshold` **不**抑制（只有 `>` 抑制）；`threshold = 1.0`
+///   不抑制任何候选（IoU 上界为 1.0）；`threshold = 0.0` 抑制所有正重叠候选；
+/// - 全重叠（相同 bbox）只保留最高分的一个；坐标相同的退化 bbox IoU 为 0，不会被
+///   误抑制；
+/// - 纯函数：不修改输入数组（内部先复制再排序）；
+/// - 错误：`iou_threshold` 非有限或不在 `[0, 1]`、`max_poses <= 0` → `InvalidConfig`。
+pub fn nms(
+  candidates : Array[PoseCandidate],
+  iou_threshold : Double,
+  max_poses : Int32,
+) -> Array[PoseCandidate] raise PoseError {
+  if !iou_threshold.is_finite() || iou_threshold < 0.0 || iou_threshold > 1.0 {
+    raise InvalidConfig("nms: iou_threshold must be in [0, 1]")
+  }
+  if max_poses <= 0 {
+    raise InvalidConfig("nms: max_poses must be positive")
+  }
+  let sorted = candidates.copy()
+  let n = sorted.length()
+  // 稳定插入排序：score 降序，同分保持输入顺序（n 为姿态数，规模很小）
+  for i in 1..<n {
+    let mut j = i
+    while j > 0 && sorted[j - 1].score < sorted[j].score {
+      sorted.swap(j - 1, j)
+      j = j - 1
+    }
+  }
+  let kept : Array[PoseCandidate] = []
+  for cand in sorted {
+    if kept.length() >= max_poses {
+      break
+    }
+    let mut suppressed = false
+    for k in kept {
+      if k.bbox.iou(cand.bbox) > iou_threshold {
+        suppressed = true
+        break
+      }
+    }
+    if !suppressed {
+      kept.push(cand)
+    }
+  }
+  kept
 }
 
 ///|
@@ -692,21 +895,22 @@ fn preprocess(
 }
 
 ///|
-/// 编排一帧的检测：输入 RGB → letterbox/stretch 缩放与归一化 → 后端推理 →
-/// 关键点解码 → 坐标还原。
+/// 编排一帧的检测（单姿态入口）：输入 RGB → letterbox/stretch 缩放与归一化 →
+/// 后端推理 → 多姿态解码 → NMS 去重 → 最高分姿态的坐标还原。
 ///
 /// - 参数：`backend` 为 trait object，由组合根注入；`image`/`config` 只读纯值。
 /// - 缩放：`keep_aspect_ratio = true` 走等比 letterbox（`Transform` 还原）；为
 ///   false 走 stretch 非等比拉伸（`StretchTransform` 还原），两者坐标反变换均正确。
-/// - 返回：`PoseResult` 纯值（坐标已还原到输入图像像素系）；`score` 为保留关键点
-///   `visibility` 的均值（无保留关键点时为 0）；`timestamp_ns` 取自图像；
-///   `backend` 为 `backend.kind()` 标注。
+/// - 返回：`PoseResult` 纯值（坐标已还原到输入图像像素系）；多姿态输出时返回
+///   **NMS 后分数最高**的姿态；`score` 为保留关键点 `visibility` 的均值（无保留
+///   关键点时为 0）；`timestamp_ns` 取自图像；`backend` 为 `backend.kind()` 标注。
 /// - 错误：配置/输入错误不重试（`InvalidConfig` / `InvalidInput`）；后端错误原样
 ///   传播（`BackendNotOpen` / `BackendFailure`，可重试或降级由上层决定）；输出张量
 ///   超过 `max_poses` 姿态块预算 `BudgetExceeded`（触发帧率降级）；解码错误
 ///   `OutputDecode` / `ShapeMismatch`。
 /// - 资源：`detect` 不获取/释放资源，只调用 `infer`；门面无可变状态，
 ///   并发约束由 `PoseBackend` 实现声明（见各后端自身文档）。
+/// - 多姿态请用 `detect_multi`；本函数保持既有的单结果签名（API 冻结语义）。
 /// - 非目标：不取帧、不做 YUV 转换、不渲染、不实现推理引擎、不管理模型文件下载。
 pub fn detect(
   backend : &PoseBackend,
@@ -714,6 +918,40 @@ pub fn detect(
   config : PoseConfig,
   frame_id : FrameId,
 ) -> PoseResult raise PoseError {
+  let poses = detect_multi(backend, image, config, frame_id)
+  if poses.length() == 0 {
+    // 不可达兜底（非空输出 + max_poses > 0 ⇒ NMS 至少保留一个候选）：
+    // 返回空结果而不是索引越界 panic，保持「畸形输入禁 panic」的红线。
+    PoseResult::{
+      landmarks: [],
+      score: 0.0,
+      frame_id,
+      timestamp_ns: image.timestamp_ns,
+      backend: backend.kind(),
+    }
+  } else {
+    poses[0]
+  }
+}
+
+///|
+/// 编排一帧的检测（多姿态入口）：输入 RGB → letterbox/stretch 缩放与归一化 →
+/// 后端推理 → 多姿态解码 → NMS 去重 → 逐姿态坐标还原。
+///
+/// - 输出张量按 `landmark_count * 3 * 4` 字节切块，每块为一个姿态；
+/// - NMS 使用 `config.nms_threshold`（bbox IoU 严格大于阈值才抑制）与
+///   `config.max_poses`（保留上限），按候选 `score` 降序贪心；
+/// - 返回数组按 `score` 降序（NMS 保留顺序）；每个 `PoseResult` 的 `score` 为
+///   该姿态保留关键点 visibility 均值，`frame_id`/`timestamp_ns`/`backend` 同
+///   单姿态入口；
+/// - 错误语义同 `detect`；空输出张量 `OutputDecode`，字节数非姿态块整数倍
+///   `ShapeMismatch`，超过 `max_poses` 预算 `BudgetExceeded`。
+pub fn detect_multi(
+  backend : &PoseBackend,
+  image : RgbImage,
+  config : PoseConfig,
+  frame_id : FrameId,
+) -> Array[PoseResult] raise PoseError {
   let (input, plan) = preprocess(image, config)
   let raw = backend.infer(input)
   // 预算控制：输出张量携带的姿态块数不得超过 max_poses（单姿态布局为 1 块）。
@@ -724,26 +962,24 @@ pub fn detect(
       "detect: output tensor \{raw.length()} bytes exceeds max_poses budget \{budget} bytes",
     )
   }
-  let landmarks = decode_output(raw, config.model, config)
-  let n = landmarks.length()
-  let score = if n == 0 {
-    0.0
-  } else {
-    let mut total = 0.0
-    for l in landmarks {
-      total = total + l.visibility
+  let candidates = decode_pose_batch(raw, config.model, config)
+  let kept = nms(candidates, config.nms_threshold, config.max_poses)
+  let backend_kind = backend.kind()
+  let poses : Array[PoseResult] = []
+  for c in kept {
+    let result = PoseResult::{
+      landmarks: c.landmarks,
+      score: c.score,
+      frame_id,
+      timestamp_ns: image.timestamp_ns,
+      backend: backend_kind,
     }
-    total / n.to_double()
+    poses.push(
+      match plan {
+        Aspect(t) => result.restore(t)
+        Stretch(t) => result.restore_stretch(t)
+      },
+    )
   }
-  let result = PoseResult::{
-    landmarks,
-    score,
-    frame_id,
-    timestamp_ns: image.timestamp_ns,
-    backend: backend.kind(),
-  }
-  match plan {
-    Aspect(t) => result.restore(t)
-    Stretch(t) => result.restore_stretch(t)
-  }
+  poses
 }

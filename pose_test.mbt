@@ -116,6 +116,39 @@ fn config_with(
 }
 
 ///|
+/// 覆盖 nms_threshold / max_poses 的配置构造器（其余字段沿用 base）。
+fn config_nms(
+  base : @pose.PoseConfig,
+  spec : @pose.ModelSpec,
+  nms_threshold : Double,
+  max_poses : Int32,
+) -> @pose.PoseConfig {
+  {
+    model: spec,
+    keep_aspect_ratio: base.keep_aspect_ratio,
+    pad_value: base.pad_value,
+    score_threshold: base.score_threshold,
+    nms_threshold,
+    max_poses,
+    mirror_x: base.mirror_x,
+  }
+}
+
+///|
+/// 2 关键点姿态的模型规格（20×20），便于用归一化坐标构造精确 bbox（NMS 测试用）。
+fn pair_spec() -> @pose.ModelSpec {
+  spec_of(
+    20,
+    20,
+    3,
+    @pose.TensorDtype::Float32,
+    [0.0, 0.0, 0.0],
+    [1.0, 1.0, 1.0],
+    2,
+  )
+}
+
+///|
 /// 全白 RGB 图像（内容不影响 Mock 固定输出）。
 fn white_image(w : Int32, h : Int32) -> @pose.RgbImage {
   {
@@ -1155,4 +1188,142 @@ test "letterbox_stretch: 模式/输入/通道错误路径" {
   assert_eq(result_name(r1), "InvalidConfig")
   assert_eq(result_name(r2), "InvalidInput")
   assert_eq(result_name(r3), "UnsupportedModel")
+}
+
+///|
+test "detect_multi: 多姿态输出按块解码并按分数降序" {
+  // Pose A: (0,0)-(10,10) score 1.0；Pose B: (10,10)-(20,20) score 0.9（bbox 相接 IoU=0）
+  let raw = raw_of([0.0, 0.0, 1.0, 0.5, 0.5, 1.0, 0.5, 0.5, 0.9, 1.0, 1.0, 0.9])
+  let spec = pair_spec()
+  let config = config_nms(config_of(spec), spec, 0.5, 2)
+  let mock = mock_of(raw, @pose.BackendKind::Mock)
+  @pose.PoseBackend::open(mock, config)
+  let r = capture(() => {
+    @pose.detect_multi(mock, white_image(20, 20), config, 5UL)
+  })
+  match r {
+    Ok(poses) => {
+      assert_eq(poses.length(), 2)
+      assert_close(poses[0].score, 1.0)
+      assert_close(poses[1].score, 0.9)
+      assert_close(poses[0].landmarks[0].x, 0.0)
+      assert_close(poses[0].landmarks[1].x, 10.0)
+      assert_close(poses[1].landmarks[0].x, 10.0)
+      assert_eq(poses[0].frame_id, 5UL)
+      assert_eq(kind_name(poses[0].backend), "Mock")
+    }
+    Err(e) => abort("unexpected error: " + err_name(e))
+  }
+  // 单姿态入口仍返回 NMS 后最高分姿态（签名不变）
+  let r1 = capture(() => @pose.detect(mock, white_image(20, 20), config, 5UL))
+  match r1 {
+    Ok(p) => assert_close(p.score, 1.0)
+    Err(e) => abort("unexpected error: " + err_name(e))
+  }
+}
+
+///|
+test "detect_multi: 全重叠姿态被 NMS 抑制（只保留最高分）" {
+  let raw = raw_of([0.0, 0.0, 1.0, 0.5, 0.5, 1.0, 0.0, 0.0, 0.9, 0.5, 0.5, 0.9])
+  let spec = pair_spec()
+  let config = config_nms(config_of(spec), spec, 0.5, 2)
+  let mock = mock_of(raw, @pose.BackendKind::Mock)
+  @pose.PoseBackend::open(mock, config)
+  let r = capture(() => {
+    @pose.detect_multi(mock, white_image(20, 20), config, 1UL)
+  })
+  match r {
+    Ok(poses) => {
+      assert_eq(poses.length(), 1)
+      assert_close(poses[0].score, 1.0)
+    }
+    Err(e) => abort("unexpected error: " + err_name(e))
+  }
+}
+
+///|
+test "detect_multi: IoU 恰等于阈值不抑制、略低于阈值才抑制" {
+  // A bbox (0,0)-(10,10)，B bbox (0,0)-(10,5)：IoU = 50/100 = 0.5
+  let raw = raw_of([0.0, 0.0, 1.0, 0.5, 0.5, 1.0, 0.0, 0.0, 0.9, 0.25, 0.5, 0.9])
+  let spec = pair_spec()
+  let keep_both = config_nms(config_of(spec), spec, 0.5, 2)
+  let suppress = config_nms(config_of(spec), spec, 0.499, 2)
+  let mock = mock_of(raw, @pose.BackendKind::Mock)
+  @pose.PoseBackend::open(mock, keep_both)
+  let r1 = capture(() => {
+    @pose.detect_multi(mock, white_image(20, 20), keep_both, 1UL)
+  })
+  let r2 = capture(() => {
+    @pose.detect_multi(mock, white_image(20, 20), suppress, 1UL)
+  })
+  match (r1, r2) {
+    (Ok(a), Ok(b)) => {
+      assert_eq(a.length(), 2)
+      assert_eq(b.length(), 1)
+      assert_close(b[0].score, 1.0)
+    }
+    _ => abort("both NMS threshold cases must succeed")
+  }
+}
+
+///|
+test "detect_multi: score_threshold 过滤掉全部关键点后姿态保留为空候选（score 0）" {
+  let raw = raw_of([0.0, 0.0, 0.5, 0.5, 0.5, 0.5])
+  let spec = pair_spec()
+  let base = config_with(config_of(spec), spec, true, 0, 0.9, 1, false)
+  let config = config_nms(base, spec, 0.5, 2)
+  let mock = mock_of(raw, @pose.BackendKind::Mock)
+  @pose.PoseBackend::open(mock, config)
+  let r = capture(() => {
+    @pose.detect_multi(mock, white_image(20, 20), config, 1UL)
+  })
+  match r {
+    Ok(poses) => {
+      assert_eq(poses.length(), 1)
+      assert_eq(poses[0].landmarks.length(), 0)
+      assert_close(poses[0].score, 0.0)
+    }
+    Err(e) => abort("unexpected error: " + err_name(e))
+  }
+}
+
+///|
+test "detect_multi: 预算超限 / 空输出 / 非整数块 / 非法 nms_threshold 错误路径" {
+  let spec = pair_spec()
+  let config = config_nms(config_of(spec), spec, 0.5, 2)
+  // 3 个姿态块 = 72 字节 > max_poses=2 的 48 字节预算（pair_spec block=24）
+  let over = mock_of(raw_uniform(6, 0.5, 0.5, 1.0), @pose.BackendKind::Mock)
+  @pose.PoseBackend::open(over, config)
+  let r1 = capture(() => {
+    @pose.detect_multi(over, white_image(20, 20), config, 1UL)
+  })
+  // 空输出张量
+  let empty = mock_of(Bytes::make(0, b'\x00'), @pose.BackendKind::Mock)
+  @pose.PoseBackend::open(empty, config)
+  let r2 = capture(() => {
+    @pose.detect_multi(empty, white_image(20, 20), config, 1UL)
+  })
+  // 18 字节不是 24 字节姿态块的整数倍
+  let partial = mock_of(Bytes::make(18, b'\x00'), @pose.BackendKind::Mock)
+  @pose.PoseBackend::open(partial, config)
+  let r3 = capture(() => {
+    @pose.detect_multi(partial, white_image(20, 20), config, 1UL)
+  })
+  let bad_nms = config_nms(config_of(spec), spec, 1.5, 2)
+  let ok = mock_of(raw_uniform(2, 0.5, 0.5, 1.0), @pose.BackendKind::Mock)
+  @pose.PoseBackend::open(ok, bad_nms)
+  let r4 = capture(() => {
+    @pose.detect_multi(ok, white_image(20, 20), bad_nms, 1UL)
+  })
+  assert_eq(result_name(r1), "BudgetExceeded")
+  assert_eq(result_name(r2), "OutputDecode")
+  assert_eq(result_name(r3), "ShapeMismatch")
+  match r3 {
+    Err(@pose.PoseError::ShapeMismatch(expected, actual)) => {
+      assert_eq(expected, 24)
+      assert_eq(actual, 18)
+    }
+    _ => abort("expected ShapeMismatch")
+  }
+  assert_eq(result_name(r4), "InvalidConfig")
 }

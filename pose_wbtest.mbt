@@ -221,3 +221,180 @@ test "f32→f16: round-to-nearest-ties-to-even 边界" {
   // 1 + 5×2^-11 恰为 0x3C02 与 0x3C03 的中点：取偶 → 0x3C02
   assert_eq(f16_bits_of(1.00244140625), 0x3C02)
 }
+
+///|
+/// 浮点近似断言（白盒测试包内本地定义；黑盒包的同名助手不可见）。
+fn assert_close(actual : Double, expected : Double) -> Unit {
+  if (actual - expected).abs() > 0.000001 {
+    abort("expected \{expected}, got \{actual}")
+  }
+}
+
+///|
+/// 用两点构造覆盖指定 bbox 的候选（两点 visibility 相同 ⇒ score 即该值）。
+fn nms_candidate(
+  score : Double,
+  x1 : Double,
+  y1 : Double,
+  x2 : Double,
+  y2 : Double,
+) -> PoseCandidate {
+  let a : Landmark = { x: x1, y: y1, z: 0.0, visibility: score, name: None, }
+  let b : Landmark = { x: x2, y: y2, z: 0.0, visibility: score, name: None, }
+  PoseCandidate::new([a, b])
+}
+
+///|
+/// nms 是否以 InvalidConfig 拒绝该参数组合。
+fn nms_rejects(
+  candidates : Array[PoseCandidate],
+  iou_threshold : Double,
+  max_poses : Int32,
+) -> Bool {
+  try {
+    let _ = nms(candidates, iou_threshold, max_poses)
+    false
+  } catch {
+    InvalidConfig(_) => true
+    _ => false
+  }
+}
+
+///|
+test "BoundingBox: area / IoU（相离 / 相接 / 嵌套 / 相同 / 退化）" {
+  let a : BoundingBox = { x1: 0.0, y1: 0.0, x2: 10.0, y2: 10.0, }
+  let b : BoundingBox = { x1: 0.0, y1: 0.0, x2: 10.0, y2: 5.0, }
+  let c : BoundingBox = { x1: 20.0, y1: 20.0, x2: 30.0, y2: 30.0, }
+  let touch : BoundingBox = { x1: 10.0, y1: 0.0, x2: 20.0, y2: 10.0, }
+  let nested : BoundingBox = { x1: 0.0, y1: 0.0, x2: 5.0, y2: 5.0, }
+  let degenerate : BoundingBox = { x1: 1.0, y1: 1.0, x2: 1.0, y2: 1.0, }
+  assert_eq(a.area(), 100.0)
+  assert_eq(b.area(), 50.0)
+  assert_eq(degenerate.area(), 0.0)
+  // 交集 50、并集 100 ⇒ 0.5
+  assert_eq(a.iou(b), 0.5)
+  // 相离 / 仅边界相接（交集面积为 0）⇒ 0
+  assert_eq(a.iou(c), 0.0)
+  assert_eq(a.iou(touch), 0.0)
+  // 嵌套：25 / 100 = 0.25；自身 = 1.0
+  assert_eq(a.iou(nested), 0.25)
+  assert_eq(a.iou(a), 1.0)
+  // 退化盒：面积为 0，IoU 记为 0（避免除零）
+  assert_eq(a.iou(degenerate), 0.0)
+  assert_eq(degenerate.iou(degenerate), 0.0)
+}
+
+///|
+test "PoseCandidate::new: score 均值 / bbox 包围 / 空输入零盒" {
+  let empty : Array[Landmark] = []
+  let e = PoseCandidate::new(empty)
+  assert_eq(e.score, 0.0)
+  assert_eq(e.landmarks.length(), 0)
+  assert_eq(e.bbox.x1, 0.0)
+  assert_eq(e.bbox.y1, 0.0)
+  assert_eq(e.bbox.x2, 0.0)
+  assert_eq(e.bbox.y2, 0.0)
+  let l1 : Landmark = { x: 2.0, y: 3.0, z: 0.0, visibility: 0.2, name: None, }
+  let l2 : Landmark = { x: 8.0, y: 9.0, z: 0.0, visibility: 0.6, name: None, }
+  let c = PoseCandidate::new([l1, l2])
+  assert_close(c.score, 0.4)
+  assert_eq(c.bbox.x1, 2.0)
+  assert_eq(c.bbox.y1, 3.0)
+  assert_eq(c.bbox.x2, 8.0)
+  assert_eq(c.bbox.y2, 9.0)
+  assert_eq(c.landmarks.length(), 2)
+}
+
+///|
+test "nms: 空输入返回空数组（不报错）" {
+  let empty : Array[PoseCandidate] = []
+  let kept = nms(empty, 0.5, 2)
+  assert_eq(kept.length(), 0)
+}
+
+///|
+test "nms: 全重叠只保留最高分（贪心排序）" {
+  let cands = [
+    nms_candidate(0.7, 20.0, 20.0, 30.0, 30.0),
+    nms_candidate(0.8, 0.0, 0.0, 10.0, 10.0),
+    nms_candidate(0.9, 0.0, 0.0, 10.0, 10.0),
+  ]
+  let kept = nms(cands, 0.5, 5)
+  assert_eq(kept.length(), 2)
+  assert_close(kept[0].score, 0.9)
+  assert_close(kept[1].score, 0.7)
+  // 纯函数：输入数组顺序未被修改
+  assert_close(cands[0].score, 0.7)
+  assert_close(cands[1].score, 0.8)
+}
+
+///|
+test "nms: 阈值边界 IoU == threshold 不抑制（严格大于才抑制）" {
+  // a bbox 100，b bbox 50，IoU = 0.5
+  let cands = [
+    nms_candidate(0.9, 0.0, 0.0, 10.0, 10.0),
+    nms_candidate(0.8, 0.0, 0.0, 10.0, 5.0),
+  ]
+  assert_eq(nms(cands, 0.5, 2).length(), 2)
+  assert_eq(nms(cands, 0.499, 2).length(), 1)
+  assert_eq(nms(cands, 0.0, 2).length(), 1)
+  assert_close(nms(cands, 0.499, 2)[0].score, 0.9)
+}
+
+///|
+test "nms: threshold=1.0 不抑制任何候选（IoU 上界为 1.0）" {
+  let cands = [
+    nms_candidate(0.9, 0.0, 0.0, 10.0, 10.0),
+    nms_candidate(0.8, 0.0, 0.0, 10.0, 5.0),
+    nms_candidate(0.7, 0.0, 0.0, 10.0, 10.0),
+  ]
+  let kept = nms(cands, 1.0, 5)
+  assert_eq(kept.length(), 3)
+}
+
+///|
+test "nms: max_poses 截断与同分稳定顺序" {
+  let cands = [
+    nms_candidate(0.5, 0.0, 0.0, 5.0, 5.0),
+    nms_candidate(0.5, 10.0, 10.0, 15.0, 15.0),
+    nms_candidate(0.5, 20.0, 20.0, 25.0, 25.0),
+  ]
+  let all = nms(cands, 0.5, 5)
+  assert_eq(all.length(), 3)
+  // 同分保持输入顺序
+  assert_eq(all[0].bbox.x1, 0.0)
+  assert_eq(all[1].bbox.x1, 10.0)
+  assert_eq(all[2].bbox.x1, 20.0)
+  let capped = nms(cands, 0.5, 2)
+  assert_eq(capped.length(), 2)
+  assert_eq(capped[0].bbox.x1, 0.0)
+  assert_eq(capped[1].bbox.x1, 10.0)
+  // 退化 bbox（两点重合）IoU 为 0，不应误抑制
+  let deg = [
+    nms_candidate(0.6, 1.0, 1.0, 1.0, 1.0),
+    nms_candidate(0.5, 1.0, 1.0, 1.0, 1.0),
+  ]
+  assert_eq(nms(deg, 0.0, 5).length(), 2)
+}
+
+///|
+test "nms: 非法阈值 / 非法 max_poses 报 InvalidConfig" {
+  let cands = [nms_candidate(0.9, 0.0, 0.0, 10.0, 10.0)]
+  let nan = Float::reinterpret_from_int(0x7FC00000).to_double()
+  let inf = Float::reinterpret_from_int(0x7F800000).to_double()
+  assert_true(nms_rejects(cands, nan, 2), msg="NaN threshold must be rejected")
+  assert_true(
+    nms_rejects(cands, -0.1, 2),
+    msg="negative threshold must be rejected",
+  )
+  assert_true(nms_rejects(cands, 1.1, 2), msg="threshold > 1 must be rejected")
+  assert_true(
+    nms_rejects(cands, inf, 2),
+    msg="infinite threshold must be rejected",
+  )
+  assert_true(nms_rejects(cands, 0.5, 0), msg="max_poses=0 must be rejected")
+  assert_true(
+    nms_rejects(cands, 0.5, -1),
+    msg="negative max_poses must be rejected",
+  )
+}
