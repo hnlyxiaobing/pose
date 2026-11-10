@@ -479,13 +479,20 @@ test "detect: 输出张量超过 max_poses 预算报 BudgetExceeded（帧率降�
 }
 
 ///|
-test "detect: 空输出张量报 OutputDecode" {
+test "detect: 空输出张量返回零检测空结果" {
   let mock = mock_of(Bytes::make(0, b'\x00'), @pose.BackendKind::Mock)
   @pose.PoseBackend::open(mock, config_of(movenet_spec()))
   let r = capture(() => {
     @pose.detect(mock, white_image(200, 100), config_of(movenet_spec()), 1UL)
   })
-  assert_eq(result_name(r), "OutputDecode")
+  assert_eq(result_name(r), "no error")
+  match r {
+    Ok(p) => {
+      assert_eq(p.landmarks.length(), 0)
+      assert_eq(p.score, 0.0)
+    }
+    _ => abort("expected Ok")
+  }
 }
 
 ///|
@@ -630,7 +637,7 @@ test "decode_output: 字节数不符报 ShapeMismatch(expected, actual)" {
 }
 
 ///|
-test "decode_output: 空张量与非有限值报 OutputDecode，规格非法报 InvalidConfig" {
+test "decode_output: 空张量返回空数组，非有限值报 OutputDecode，规格非法报 InvalidConfig" {
   let spec = spec_of(
     8,
     8,
@@ -654,7 +661,7 @@ test "decode_output: 空张量与非有限值报 OutputDecode，规格非法报 
   let r3 = capture(() => {
     @pose.decode_output(raw_uniform(1, 0.5, 0.5, 1.0), spec, bad_config)
   })
-  assert_eq(result_name(r1), "OutputDecode")
+  assert_eq(result_name(r1), "no error")
   assert_eq(result_name(r2), "OutputDecode")
   assert_eq(result_name(r3), "InvalidConfig")
 }
@@ -1316,7 +1323,7 @@ test "detect_multi: 预算超限 / 空输出 / 非整数块 / 非法 nms_thresho
     @pose.detect_multi(ok, white_image(20, 20), bad_nms, 1UL)
   })
   assert_eq(result_name(r1), "BudgetExceeded")
-  assert_eq(result_name(r2), "OutputDecode")
+  assert_eq(result_name(r2), "no error")
   assert_eq(result_name(r3), "ShapeMismatch")
   match r3 {
     Err(@pose.PoseError::ShapeMismatch(expected, actual)) => {

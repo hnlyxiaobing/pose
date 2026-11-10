@@ -882,8 +882,9 @@ fn filter_landmarks(
 ///   `z = 0`（2D 模型无深度），`visibility = score`，`name = None`（张量无名称）。
 /// - 阈值过滤：`score < config.score_threshold` 的关键点被剔除。
 /// - 多姿态输出请用 `decode_pose_batch`（本函数要求恰好一个姿态块的字节数）。
-/// - 错误：规格/配置非法 `InvalidConfig`；空张量或非有限数值 `OutputDecode`；
+/// - 错误：规格/配置非法 `InvalidConfig`；非有限数值 `OutputDecode`；
 ///   字节数与 `landmark_count * 3 * 4` 不符 `ShapeMismatch(expected, actual)`。
+/// - 空张量（0 字节）视为零检测：返回空数组，不报错。
 pub fn decode_output(
   raw : Bytes,
   spec : ModelSpec,
@@ -892,7 +893,7 @@ pub fn decode_output(
   validate_spec_and_config(spec, config)
   let block = spec.landmark_count * 3 * 4
   if raw.length() == 0 {
-    raise OutputDecode("decode_output: empty output tensor")
+    return []
   }
   if raw.length() != block {
     raise ShapeMismatch(block, raw.length())
@@ -906,8 +907,9 @@ pub fn decode_output(
 ///
 /// - 每个候选的 `score` 与 `bbox` 均基于**过滤后**保留的关键点计算，与
 ///   `PoseResult.score` 的既有语义（保留关键点 visibility 均值）一致。
-/// - 错误：规格/配置非法 `InvalidConfig`；空张量或非有限数值 `OutputDecode`；
+/// - 错误：规格/配置非法 `InvalidConfig`；非有限数值 `OutputDecode`；
 ///   字节数不是姿态块整数倍 `ShapeMismatch(block, raw.length())`。
+/// - 空张量（0 字节）视为零检测：返回空数组，不报错。
 /// - 预算（`max_poses`）由编排层 `detect_multi` 在调用本函数前检查。
 pub fn decode_pose_batch(
   raw : Bytes,
@@ -917,7 +919,7 @@ pub fn decode_pose_batch(
   validate_spec_and_config(spec, config)
   let block = spec.landmark_count * 3 * 4
   if raw.length() == 0 {
-    raise OutputDecode("decode_pose_batch: empty output tensor")
+    return []
   }
   if raw.length() % block != 0 {
     raise ShapeMismatch(block, raw.length())
@@ -1097,8 +1099,7 @@ pub fn detect(
 ) -> PoseResult raise PoseError {
   let poses = detect_multi(backend, image, config, frame_id)
   if poses.length() == 0 {
-    // 不可达兜底（非空输出 + max_poses > 0 ⇒ NMS 至少保留一个候选）：
-    // 返回空结果而不是索引越界 panic，保持「畸形输入禁 panic」的红线。
+    // 零检测（空输出张量或全部候选被阈值过滤）：返回空结果。
     PoseResult::{
       landmarks: [],
       score: 0.0,
