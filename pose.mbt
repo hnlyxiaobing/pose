@@ -505,16 +505,28 @@ fn letterbox_plan(
 }
 
 ///|
-/// 取源图像 (x, y) 处像素并统一为 RGB 顺序（丢弃 alpha 通道）。
-fn read_rgb(image : RgbImage, x : Int32, y : Int32) -> (Int32, Int32, Int32) {
+/// 取源图像 (x, y) 处像素，按 RGB 顺序写入调用方持有的复用缓冲（丢弃 alpha）。
+/// 直接写 Double，避免逐像素 tuple / 数组分配（前处理热路径）。
+fn read_rgb_into(
+  image : RgbImage,
+  x : Int32,
+  y : Int32,
+  out : FixedArray[Double],
+) -> Unit {
   let ch = layout_channels(image.layout)
   let off = (y * image.width + x) * ch
   let d = image.data
   match image.layout {
-    Rgb => (d[off].to_int(), d[off + 1].to_int(), d[off + 2].to_int())
-    Bgr => (d[off + 2].to_int(), d[off + 1].to_int(), d[off].to_int())
-    Rgba => (d[off].to_int(), d[off + 1].to_int(), d[off + 2].to_int())
-    Bgra => (d[off + 2].to_int(), d[off + 1].to_int(), d[off].to_int())
+    Rgb | Rgba => {
+      out[0] = d[off].to_int().to_double()
+      out[1] = d[off + 1].to_int().to_double()
+      out[2] = d[off + 2].to_int().to_double()
+    }
+    Bgr | Bgra => {
+      out[0] = d[off + 2].to_int().to_double()
+      out[1] = d[off + 1].to_int().to_double()
+      out[2] = d[off].to_int().to_double()
+    }
   }
 }
 
@@ -688,21 +700,23 @@ fn resize_encode(
   let h = image.height
   let elem = dtype_size(spec.input_dtype)
   let out = FixedArray::make(tw * th * 3 * elem, b'\x00')
+  let values = FixedArray::make(3, 0.0)
+  let pad = config.pad_value.to_double()
   for ty in 0..<th {
     for tx in 0..<tw {
-      let pixel = if tx >= plan.pad_x &&
+      if tx >= plan.pad_x &&
         tx < plan.pad_x + plan.scaled_w &&
         ty >= plan.pad_y &&
         ty < plan.pad_y + plan.scaled_h {
         let sx0 = (tx - plan.pad_x) * w / plan.scaled_w
         let sy = (ty - plan.pad_y) * h / plan.scaled_h
         let sx = if config.mirror_x { w - 1 - sx0 } else { sx0 }
-        read_rgb(image, sx, sy)
+        read_rgb_into(image, sx, sy, values)
       } else {
-        (config.pad_value, config.pad_value, config.pad_value)
+        values[0] = pad
+        values[1] = pad
+        values[2] = pad
       }
-      let (r, g, b) = pixel
-      let values = [r.to_double(), g.to_double(), b.to_double()]
       for c in 0..<3 {
         let v = (values[c] - spec.mean[c]) / spec.std[c]
         encode_value(
