@@ -1,61 +1,84 @@
-# hnlyxiaobing/pose
+# pose · 姿态估计门面
 
-**姿态检测门面 —— 只定义 `PoseBackend` 接口与前后处理，推理后端可插拔。**
+> 独立发布单元 ｜ L3 感知绑定 ｜ `preferred_target = wasm` ｜ Apache-2.0
+> 状态：`moon test` **62/62** 通过（2026-11-11 本机实测）；本文件是本仓库**唯一**说明文档。
+> 公开 API 以 `pkg.generated.mbti` 为准（由 `moon info` 生成，禁手工编辑）；加法性变更须登记簿记 + 快照审阅 + 快照门禁。
 
-> 状态：**R4 增量实现（2026-11-09）**。`detect`/`detect_multi` 编排、letterbox/stretch 前处理、输出解码、**NMS 姿态去重**、**Float16 编码**、坐标还原与 **TfliteAdapter 注入式后端适配器**均已实现；`moon check --deny-warn` 0 error 0 warning、`moon test` 62/62 全过（基线 30）。`PoseBackend` 方法集与 `PoseError` 可见性保持冻结，R4 变更全部为加法性。
+## 1. 定位与边界
 
-## 定位与为什么存在
+用中立的值类型与 `PoseBackend` trait 把「张量输出」解码成关键点，隔离上层与具体推理后端。
 
-选型复核（2026-11-06 检索 mooncakes.io）：`mediapipe` / `pose` / `landmark` 无可用 MoonBit 绑定（仅 `fiducial_marker@0.1.1` 标记检测），故门面**纯 MoonBit 自研**。各家模型前后处理差异大，若不抽门面，上层会被具体引擎绑死。
+**能力**
 
-**两个关键修正**：
+- `PoseBackend` 四方法契约与 `detect(&PoseBackend, …)`
+- `decode_output` 支持 MoveNet 17 点与 MediaPipe/BlazePose 33 点同构布局（由 `ModelSpec.landmark_count` 配置）
+- NMS（稳定降序、IoU 严格大于阈值）、stretch/ROI 缩放、Float16（RNE、NaN `0x7E00`）
+- `TfliteAdapter` / `TfliteBinding` 注入式适配器（三回调），`MockBackend` / `AltBackend` 演示包外可实现
 
-1. **提前到第一轮实现**（原计划把它排在相机之后的后置阶段）：原计划「取帧 → 姿态推理 → 电视渲染」的闭环验收清单里**没有 `pose`**，感知闭环逻辑上无法闭合。感知最小闭环（本地图片 → 姿态推理 → 关键点）必须有门面，但**不需要相机**——本地图片 + Mock 后端即可验证（详见 `docs/DECISIONS.md`「附：开发顺序结论」）。
-2. **门面持有 trait，后端不依赖门面**：`pose` 定义 `PoseBackend` 并通过 `&PoseBackend` trait object 调用；`tflite_ffi` / MediaPipe / ONNX 都不知道 `pose` 存在，由组合根写适配器。这样消除「门面→后端、后端→门面」的潜在循环依赖，且换后端不改上层 API（决策详见 `docs/DECISIONS.md` 决策 1）。
+**非目标**
 
-## 能力范围 / 非目标
+- 不 import 任何推理后端；不封装 MediaPipe Tasks C API
+- 不做模型加载、张量分配与锚点解码的两阶段编排（属组合根）
 
-- **做**：`PoseBackend` trait（`open` / `infer` / `close` / `kind`）、中性 `RgbImage` / `Landmark` / `PoseResult` / `Transform` / `StretchTransform` / `BoundingBox` / `PoseCandidate`、`ModelSpec` / `PoseConfig` 配置化、`detect`/`detect_multi` 编排、letterbox 等比前处理、stretch 非等比前处理、Float16 编码、输出张量解码、**NMS 姿态去重**、关键点坐标还原、`TfliteAdapter` 注入式后端适配器骨架。
-- **不做**：取帧、YUV 转换、渲染、**实现推理引擎**、模型文件下载、模型 zoo、量化决策、后端句柄管理。
-- 后端二选一/多选：TFLite（首选，`TfliteBinding` 由组合根注入）、MediaPipe（后续增强后端，P2）、ONNX Runtime（备选，P2）、Mock（测试替身），选型理由见 `docs/DECISIONS.md` 决策 2。**本库不 import 任何一个**，也不持有任何引擎句柄。
+## 2. 关键设计决策（本仓库自足记录）
 
-## 公开接口（速览）
+- 门面持有 trait，后端不知道门面存在，消除 `pose ↔ tflite_ffi` 循环。
+- R4 把 `TfliteAdapter` 实现收进本包（`pub impl PoseBackend for TfliteAdapter`），`TfliteBinding` 以回调注入；`pose` 不 import 后端的红线仍守住。
+- Q8 已收官：目标 App 实测为 **33 点 BlazePose**，由配置层吸收而非换后端；ADR-0008 的「第一轮 17 点」前提已修订。
+- `PoseBackend` 方法集冻结，新增 `infer_async` 属破坏性变更须裁决。
 
-`detect(&PoseBackend, RgbImage, PoseConfig, FrameId) -> PoseResult`、`detect_multi(...) -> Array[PoseResult]`、`decode_output`、`decode_pose_batch`、`nms`、`letterbox`、`letterbox_stretch`、`PoseResult::restore` / `restore_stretch`、`TfliteAdapter`（`new` / `unavailable` / `with_fallback` / `used_fallback`）。完整签名见 `docs/API.md`。
+## 3. 公开 API 索引（自动抽取 `pkg.generated.mbti` 的 `pub` 声明行；完整字段见快照）
 
-`PoseBackend`（`pub(open)`）**方法集已冻结为 `open` / `infer` / `close` / `kind` 四个方法，冻结后增删方法即破坏性变更**；`close` 幂等语义：**不会二次释放，重复调用返回明确错误**（本库无 `detach` 方法）。`PoseError` 为 `pub(all) suberror`（包外适配器可构造）。
+```text
+pub fn decode_output(Bytes, ModelSpec, PoseConfig) -> Array[Landmark] raise PoseError
+pub fn decode_pose_batch(Bytes, ModelSpec, PoseConfig) -> Array[PoseCandidate] raise PoseError
+pub fn detect(&PoseBackend, RgbImage, PoseConfig, UInt64) -> PoseResult raise PoseError
+pub fn detect_multi(&PoseBackend, RgbImage, PoseConfig, UInt64) -> Array[PoseResult] raise PoseError
+pub fn letterbox(RgbImage, PoseConfig) -> (Bytes, Transform) raise PoseError
+pub fn letterbox_stretch(RgbImage, PoseConfig) -> (Bytes, StretchTransform) raise PoseError
+pub fn nms(Array[PoseCandidate], Double, Int32) -> Array[PoseCandidate] raise PoseError
+pub(all) suberror PoseError {
+pub(all) enum BackendKind {
+pub(all) struct BoundingBox {
+pub fn BoundingBox::area(Self) -> Double
+pub fn BoundingBox::iou(Self, Self) -> Double
+pub(all) struct Landmark {
+pub(all) struct ModelSpec {
+pub(all) struct PoseCandidate {
+pub fn PoseCandidate::new(Array[Landmark]) -> Self
+pub(all) struct PoseConfig {
+pub(all) struct PoseResult {
+pub fn PoseResult::restore(Self, Transform) -> Self raise PoseError
+pub fn PoseResult::restore_stretch(Self, StretchTransform) -> Self raise PoseError
+pub(all) struct RgbImage {
+pub(all) enum RgbLayout {
+pub(all) struct StretchTransform {
+pub(all) enum TensorDtype {
+pub fn TfliteAdapter::close(Self) -> Unit raise PoseError
+pub fn TfliteAdapter::infer(Self, Bytes) -> Bytes raise PoseError
+pub fn TfliteAdapter::kind(Self) -> BackendKind
+pub fn TfliteAdapter::new(TfliteBinding, ModelSpec) -> Self
+pub fn TfliteAdapter::open(Self, PoseConfig) -> Unit raise PoseError
+pub fn TfliteAdapter::unavailable(ModelSpec) -> Self
+pub fn TfliteAdapter::used_fallback(Self) -> Bool
+pub fn TfliteAdapter::with_fallback(TfliteBinding?, TfliteBinding?, ModelSpec) -> Self
+pub(all) struct TfliteBinding {
+pub(all) struct Transform {
+pub(open) trait PoseBackend {
+```
 
-## 依赖
+## 4. 依赖、平台与许可
 
-- **本轮零依赖**；独立 `moon.mod`，`moon check` 独立通过。
-- 后续轮：后端适配器在**组合根**实现；`pose` 自身不引入 `tflite_ffi` / `moon-ort` / MediaPipe 依赖（零依赖与引入门槛见 `docs/DECISIONS.md` 决策 5）。
+零第三方依赖；`preferred_target = wasm`；Apache-2.0。
 
-## 平台与许可风险
+## 5. 命令行与验证
 
-- 平台：全后端（`preferred_target = "wasm"`，未改动）；Mock 后端可在桌面纯 MoonBit 测试。
-- 许可：本仓库 Apache-2.0；门面自身无外部二进制。模型许可（MoveNet Apache-2.0、BlazePose/MediaPipe Apache-2.0）与 `.so` 分发许可由后端承担，口径见 `docs/DECISIONS.md` 决策 2。
-- 风险：前后处理与模型强绑定（`ModelSpec` 配置化缓解）；MediaPipe 输出 33 点而 MoveNet 17 点；2GB 电视 5–15 fps 的帧率预算；`infer(Bytes) -> Bytes` 是无类型字节契约，形状错误只能在运行时发现（用 `ShapeMismatch` 报出）。
-- `[待验证假设]` 目标应用是否需要 33 关键点 / 3D world landmarks 尚待评审——评审需拍板；若需要，第一轮后端选型需复议（见 `docs/DECISIONS.md` 决策 4）。
+- 本库无 CLI；`cmd/main` 为模板。
+- 复验：`moon clean` → `moon check --deny-warn` → `moon build` → `moon test` → `moon fmt --check` → `moon info` 后检查 `pkg.generated.mbti` 无意外 diff。
+- 本仓库为独立 Git 仓库，文档与 CI 均自包含，不依赖工作区其他目录。
 
-## 测试与验收
+## 6. 风险与未决
 
-- **测试策略**：Mock/Alt 后端与注入式 `TfliteBinding` mock 纯 MoonBit 单测（无需 `.so` / 设备）；letterbox/stretch 字节与还原参数断言；输出解码/多姿态 NMS 形状与排序测试；f16 逐值与集成；配置非法 / 后端未 open / 输出解码失败 / 预算超限 / 后端缺失回退的错误路径。test 包内 `MockBackend` / `AltBackend` 实现 `@pose.PoseBackend`，兼作「包外可实现」证据。
-- **门禁（实跑，全部 exit 0）**：`moon clean` · `moon check --deny-warn` · `moon build` · `moon test`（62/62 全过）· `moon fmt --check` · `moon info` + 快照 diff。
-- **验收标准**（实现轮）：换 TFLite / ONNX / Mock 后端不改上层调用；关键点坐标还原到输入图像坐标系正确；`moon check --deny-warn` 转绿（已达成）。与 Python `tflite-runtime` 的 <1e-4 数值对齐属 P2，**本轮未做**。
+- P1-b 第二步的 ROI crop 接口尚未交付。
+- 与 Python tflite-runtime 的 <1e-4 逐元素数值对齐未做（本机无 numpy / flatbuffers / tflite_runtime）。
 
-## 当前状态 / 本轮产物
-
-| 项 | 状态 |
-|---|---|
-| `pose.mbt` 数据结构 + `PoseBackend` trait + 实现（detect/detect_multi / letterbox/letterbox_stretch / decode_output/decode_pose_batch / nms / restore/restore_stretch） | ✅ |
-| `TfliteAdapter` + `TfliteBinding`（组合根注入、无 `tflite_ffi` import） | ✅ 骨架 + mock 注入测试；真实引擎绑定由组合根实现（未接入） |
-| `pkg.generated.mbti` API 快照（R4 加法性新增已随源码提交） | ✅ |
-| 编排 / letterbox / 解码 / 坐标还原 | ✅ 已实现，62 测试全过（基线 30 → 62） |
-| NMS / Float16 / stretch | ✅ 已实现（真实模型上的 NMS 阈值标定属后续实测） |
-| API 冻结（`PoseBackend` 四方法 / `PoseError` `pub(all)`） | ✅ 保持冻结（2026-11-07），R4 无破坏性变更 |
-| 门禁 `moon clean` / `check --deny-warn` / `build` / `test` / `fmt --check` / 快照 diff | ✅ 全部 exit 0 |
-| P2（MediaPipe/ONNX 第二后端、tflite-runtime 数值对齐） | ❌ 本轮未做（如实登记） |
-
-## 文档索引
-
-`docs/DESIGN.md`（设计契约）· `docs/API.md`（公开 API）· `docs/DECISIONS.md`（设计决策记录：门面持有 trait / 推理后端选型 / 零跨模块依赖与同构值类型 / 模型输出布局基准 / 依赖政策）
