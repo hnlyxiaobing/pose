@@ -1,7 +1,7 @@
 # pose · 姿态估计门面
 
 > 独立发布单元 ｜ L3 感知绑定 ｜ `preferred_target = wasm` ｜ Apache-2.0
-> 状态：`moon test` **62/62** 通过（2026-11-11 本机实测）；本文件是本仓库**唯一**说明文档。
+> 状态：`moon test` **64/64** 通过（2026-11-17 本机实测，含 2 条异步门面用例）；带日期的开发/测试文档见 `docs/`，本文件是唯一入口文档。
 > 公开 API 以 `pkg.generated.mbti` 为准（由 `moon info` 生成，禁手工编辑）；加法性变更须登记簿记 + 快照审阅 + 快照门禁。
 
 ## 1. 定位与边界
@@ -25,11 +25,13 @@
 - 门面持有 trait，后端不知道门面存在，消除 `pose ↔ tflite_ffi` 循环。
 - R4 把 `TfliteAdapter` 实现收进本包（`pub impl PoseBackend for TfliteAdapter`），`TfliteBinding` 以回调注入；`pose` 不 import 后端的红线仍守住。
 - Q8 已收官：目标 App 实测为 **33 点 BlazePose**，由配置层吸收而非换后端；ADR-0008 的「第一轮 17 点」前提已修订。
-- `PoseBackend` 方法集冻结，新增 `infer_async` 属破坏性变更须裁决。
+- `PoseBackend` 方法集冻结；异步后端经 2026-11-17 裁决 A 另立 `AsyncPoseBackend` trait 与 `detect_async`/`detect_multi_async` 新入口（纯加法），旧同步 trait 与方法零改动；异步执行依赖工具链自带核心实验包（非第三方依赖）。
 
 ## 3. 公开 API 索引（自动抽取 `pkg.generated.mbti` 的 `pub` 声明行；完整字段见快照）
 
 ```text
+pub async fn detect_async(&AsyncPoseBackend, RgbImage, PoseConfig, UInt64) -> PoseResult
+pub async fn detect_multi_async(&AsyncPoseBackend, RgbImage, PoseConfig, UInt64) -> Array[PoseResult]
 pub fn decode_output(Bytes, ModelSpec, PoseConfig) -> Array[Landmark] raise PoseError
 pub fn decode_pose_batch(Bytes, ModelSpec, PoseConfig) -> Array[PoseCandidate] raise PoseError
 pub fn detect(&PoseBackend, RgbImage, PoseConfig, UInt64) -> PoseResult raise PoseError
@@ -65,6 +67,7 @@ pub fn TfliteAdapter::with_fallback(TfliteBinding?, TfliteBinding?, ModelSpec) -
 pub(all) struct TfliteBinding {
 pub(all) struct Transform {
 pub(open) trait PoseBackend {
+pub(open) trait AsyncPoseBackend {
 ```
 
 ## 4. 依赖、平台与许可

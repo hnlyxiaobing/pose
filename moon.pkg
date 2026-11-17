@@ -1,1 +1,9 @@
 warnings = "-78"
+
+import {
+  "moonbitlang/core/async",
+} for "test"
+
+options(
+  "allow-experimental-packages": true,
+)

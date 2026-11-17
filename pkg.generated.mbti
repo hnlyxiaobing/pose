@@ -12,7 +12,11 @@ pub fn decode_pose_batch(Bytes, ModelSpec, PoseConfig) -> Array[PoseCandidate] r
 
 pub fn detect(&PoseBackend, RgbImage, PoseConfig, UInt64) -> PoseResult raise PoseError
 
+pub async fn detect_async(&AsyncPoseBackend, RgbImage, PoseConfig, UInt64) -> PoseResult
+
 pub fn detect_multi(&PoseBackend, RgbImage, PoseConfig, UInt64) -> Array[PoseResult] raise PoseError
+
+pub async fn detect_multi_async(&AsyncPoseBackend, RgbImage, PoseConfig, UInt64) -> Array[PoseResult]
 
 pub fn letterbox(RgbImage, PoseConfig) -> (Bytes, Transform) raise PoseError
 
@@ -161,6 +165,13 @@ pub(all) struct Transform {
 pub type FrameId = UInt64
 
 // Traits
+pub(open) trait AsyncPoseBackend {
+  async fn open(Self, PoseConfig) -> Unit
+  async fn infer(Self, Bytes) -> Bytes
+  async fn close(Self) -> Unit
+  async fn kind(Self) -> BackendKind
+}
+
 pub(open) trait PoseBackend {
   fn open(Self, PoseConfig) -> Unit raise PoseError
   fn infer(Self, Bytes) -> Bytes raise PoseError
