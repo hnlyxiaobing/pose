@@ -14,11 +14,9 @@
 #        非 moon info 生成的存档与第三方包缓存下的快照不受本仓库版本控制，不在 diff 范围。）
 # （可选 moon clean：仅清理，continue-on-error，不参与判定）
 #
-# 工具链版本锁定（钉死以下版本，断言步骤强制校验）：
-#   moon    0.1.20261104
-#   moonc   v0.10.20+65efd5b93
-#   moonrun 0.1.20261104
-#   core    0.10.20+65efd5b93（以 ~/.moon/lib/core/moon.mod 为准）
+# 工具链版本说明：
+#   （2026-11-19 起不再钉死：安装脚本只提供 latest，版本化产物一律 HTTP 403，
+#     详见下方依赖策略末条）
 #
 # 依赖策略（详见 docs/DECISIONS.md 决策 5）：
 #   - 禁止无版本 `moon update`：`moon update --help` 实测只有 --target-dir/-q/-v/--trace/--dry-run，
@@ -26,8 +24,12 @@
 #   - 依赖只按本模块 moon.mod 中已钉死的版本声明由 check/build 自动同步。
 #   - 如确需显式预取：`moon fetch <author>/<name>@<version> --no-update`（钉死版本且不刷新 registry 元数据）。
 #   - 不用 `moon build --frozen`：全新 checkout 没有本地依赖缓存，--frozen 会直接失败。
-#   - 版本安装：优先 `unix.sh <版本>` 钉死安装；若 CDN 拒绝版本化产物（2026-11-07 实测 403），
-#     回退安装 latest，并由下一步的版本断言**强制**校验——断言不过即失败，锁不会静默漂移。
+#   - 工具链安装（2026-11-19 修正）：cli.moonbitlang.com 只提供 latest/nightly，版本化产物
+#     `binaries/<版本>/...` 与 `cores/core-<版本>.tar.gz` 一律 HTTP 403（2026-11-19 实测
+#     0.1.20261104 与 0.1.20261117 均 403，仅 latest 返回 200），`unix.sh <版本>` 参数不可能成功；
+#     旧策略「钉死版本 + 回退 latest + 精确版本断言」逻辑自相矛盾，latest 前进后断言必然失败。
+#     现改为：显式安装 latest（失败即 fail，不做静默回退）；打印实际版本供日志追溯；只断言
+#     可验证的不变量（moon 来自本次安装目录、三件套均在、core 已安装）。版本漂移不再硬失败。
 # ============================================================================
 name: ci
 
@@ -39,12 +41,6 @@ on:
 permissions:
   contents: read
 
-env:
-  MOON_VERSION_LOCKED: "0.1.20261104"
-  MOONC_VERSION_LOCKED: "v0.10.20+65efd5b93"
-  MOONRUN_VERSION_LOCKED: "0.1.20261104"
-  CORE_VERSION_LOCKED: "0.10.20+65efd5b93"
-
 jobs:
   five-gates:
     name: five-gates (pose)
@@ -55,43 +51,39 @@ jobs:
       - name: Checkout pose
         uses: actions/checkout@v5
 
-      - name: Install MoonBit toolchain (pinned ${{ env.MOON_VERSION_LOCKED }})
+      - name: Install MoonBit toolchain (latest)
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
           mkdir -p "$HOME/.moon/tmp"
-          if ! curl -fsSL https://cli.moonbitlang.com/install/unix.sh -o "$HOME/.moon/tmp/install.sh"; then
-            echo "::error::cannot download https://cli.moonbitlang.com/install/unix.sh"
-            exit 1
-          fi
-          if bash "$HOME/.moon/tmp/install.sh" "$MOON_VERSION_LOCKED"; then
-            echo "pinned install OK: moon $MOON_VERSION_LOCKED"
-          else
-            echo "::warning::pinned install of moon $MOON_VERSION_LOCKED failed (cli.moonbitlang.com versioned artifacts returned HTTP 403 when probed on 2026-11-07; only latest/nightly were reachable). Falling back to 'latest' - the next step asserts the locked versions and FAILS on any drift."
-            bash "$HOME/.moon/tmp/install.sh" || { echo "::error::fallback install failed"; exit 1; }
-          fi
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh -o "$HOME/.moon/tmp/install.sh"
+          bash "$HOME/.moon/tmp/install.sh"
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
-      - name: Assert locked toolchain versions (moon / moonc / moonrun / core)
+      - name: Verify toolchain installation (moon / moonc / moonrun / core)
         shell: bash
         run: |
           set -euo pipefail
           out="$(moon version --all)"
           echo "$out"
-          fail=0
-          grep -qF "moon $MOON_VERSION_LOCKED" <<<"$out" || { echo "::error::moon drift: expected $MOON_VERSION_LOCKED"; fail=1; }
-          grep -qF "moonc $MOONC_VERSION_LOCKED" <<<"$out" || { echo "::error::moonc drift: expected $MOONC_VERSION_LOCKED"; fail=1; }
-          grep -qF "moonrun $MOONRUN_VERSION_LOCKED" <<<"$out" || { echo "::error::moonrun drift: expected $MOONRUN_VERSION_LOCKED"; fail=1; }
-          core_mod="$HOME/.moon/lib/core/moon.mod"
-          if [[ -f "$core_mod" ]]; then
-            echo "--- $core_mod ---"
-            grep -E '^(name|version) *=' "$core_mod" || true
-            grep -qF "version = \"$CORE_VERSION_LOCKED\"" "$core_mod" || { echo "::error::moonbitlang/core drift: expected $CORE_VERSION_LOCKED"; fail=1; }
-          else
-            echo "::error::missing $core_mod (core not installed)"
-            fail=1
+          moon_path="$(command -v moon)"
+          if [[ "$moon_path" != "$HOME/.moon/bin/moon" ]]; then
+            echo "::error::moon resolves to $moon_path, expected $HOME/.moon/bin/moon (a stale toolchain is earlier on PATH)"
+            exit 1
           fi
-          exit $fail
+          for tool in moon moonc moonrun; do
+            grep -qE "^$tool " <<<"$out" || {
+              echo "::error::$tool missing from 'moon version --all'"
+              exit 1
+            }
+          done
+          core_mod="$HOME/.moon/lib/core/moon.mod"
+          if [[ ! -f "$core_mod" ]]; then
+            echo "::error::missing $core_mod (core not installed)"
+            exit 1
+          fi
+          echo "--- $core_mod ---"
+          grep -E '^(name|version) *=' "$core_mod" || true
 
       # ---- 五道门禁：顺序执行，任一非 0 即失败 ----
       - name: "Gate 1/5 · moon check --deny-warn"
