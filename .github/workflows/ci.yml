@@ -156,8 +156,8 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          bash tools/verify.sh --no-native
-          rc=$?
+          rc=0
+          bash tools/verify.sh --no-native || rc=$?
           if [ "$rc" -eq 0 ]; then
             echo "meta-contract OK (all green, incl. real oracle diff)"
             exit 0
