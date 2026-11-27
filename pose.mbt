@@ -1,8 +1,9 @@
 ///|
 /// 姿态检测门面（facade）：类型、`PoseBackend` trait 与编排/前后处理实现。
 ///
-/// 契约决策（见 docs/DECISIONS.md）：门面拥有 `PoseBackend` trait 与中性值类型，
-/// 后端（tflite_ffi / MediaPipe / ONNX）**不依赖本库**，由组合根提供适配器实现 trait。
+/// 契约决策（见 `docs/2026-11-17-backend-neutral-facade-dev-plan.md` §3 边界裁决）：
+/// 门面拥有 `PoseBackend` trait 与中性值类型，后端 **不依赖本库**，
+/// 由组合根提供适配器实现 trait。
 /// 由此消除「门面→后端、后端→门面」的潜在循环依赖，换后端不换上层 API。
 /// 本文件实现 detect 编排、letterbox 前处理、decode_output 后处理与坐标还原；
 /// **不实现推理引擎**，不 import 任何后端模块。
@@ -28,7 +29,7 @@ pub(all) struct PoseResult {
 }
 
 ///|
-/// 门面侧的中性 RGB 图像（与 `yuv::RgbImage` 结构一致，由组合根适配）。
+/// 门面侧的中性 RGB 图像（结构与外部组合根的图像值一致，由组合根适配等价映射）。
 pub(all) struct RgbImage {
   width : Int32
   height : Int32
@@ -38,7 +39,7 @@ pub(all) struct RgbImage {
 }
 
 ///|
-/// 门面侧的通道顺序枚举（与 `yuv::RgbLayout` 同构）。
+/// 门面侧的通道顺序枚举（与外部组合根的通道顺序枚举同构，由组合根适配等价映射）。
 pub(all) enum RgbLayout {
   Rgb
   Bgr
@@ -96,7 +97,8 @@ pub(all) struct PoseConfig {
 /// - `infer` 是纯调用，不持有相机、不持有渲染状态；
 /// - 后端自有资源的获取/释放在 `open` / `close` 中完成，错误以 `PoseError` 传播；
 /// - 实现不得向上层暴露具体引擎类型（TFLite / MediaPipe 句柄等）。
-/// 可见性：`pub(open)`，组合根（包外）可实现本 trait 注入后端（见 docs/DECISIONS.md）。
+/// 可见性：`pub(open)`，组合根（包外）可实现本 trait 注入后端（见
+/// `docs/2026-11-17-backend-neutral-facade-dev-plan.md` §3 边界裁决 G1）。
 pub(open) trait PoseBackend {
   fn open(Self, PoseConfig) -> Unit raise PoseError
   fn infer(Self, Bytes) -> Bytes raise PoseError
@@ -107,7 +109,7 @@ pub(open) trait PoseBackend {
 ///|
 /// 组合根注入的 TFLite 引擎绑定：把门面的无类型字节契约映射到具体引擎调用。
 ///
-/// **本库不 import `tflite_ffi`**：组合根持有 `tflite_ffi::Interpreter`，
+/// **本库不 import 任何推理后端**：组合根持有具体引擎的 interpreter，
 /// 用三个闭包/函数实现本绑定后注入 `TfliteAdapter`：
 /// - `open(config)` → 加载模型、创建 interpreter（资源由组合根/后端持有）；
 /// - `infer(input)` → `set_input` + `invoke` + `output_raw`，返回输出张量字节；
@@ -142,7 +144,7 @@ pub struct TfliteAdapter {
 }
 
 ///|
-/// 用主绑定构造适配器（正常路径：组合根已拿到真实 `tflite_ffi` 引擎）。
+/// 用主绑定构造适配器（正常路径：组合根已拿到真实推理引擎的绑定）。
 pub fn TfliteAdapter::new(
   binding : TfliteBinding,
   spec : ModelSpec,
@@ -1136,7 +1138,7 @@ pub fn detect(
 /// - 返回数组按 `score` 降序（NMS 保留顺序）；每个 `PoseResult` 的 `score` 为
 ///   该姿态保留关键点 visibility 均值，`frame_id`/`timestamp_ns`/`backend` 同
 ///   单姿态入口；
-/// - 错误语义同 `detect`；空输出张量 `OutputDecode`，字节数非姿态块整数倍
+/// - 错误语义同 `detect`；空输出张量视为零检测（返回空数组，非错误），字节数非姿态块整数倍
 ///   `ShapeMismatch`，超过 `max_poses` 预算 `BudgetExceeded`。
 pub fn detect_multi(
   backend : &PoseBackend,

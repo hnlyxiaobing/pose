@@ -298,7 +298,7 @@ test "detect: Mock 后端固定输出 → 解码 + letterbox 逆变换还原坐�
   let spec = movenet_spec()
   let config = config_of(spec)
   let image = white_image(200, 100)
-  // open/close 由组合根（实现方）负责，detect 不管理资源（DESIGN §5）
+  // open/close 由组合根（实现方）负责，detect 不管理资源
   @pose.PoseBackend::open(mock, config)
   let r = capture(() => @pose.detect(mock, image, config, 7UL))
   match r {

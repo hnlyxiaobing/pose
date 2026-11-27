@@ -1,3 +1,21 @@
 #!/bin/sh
+#
+# pose 模块本地提交钩子：与 CI 五道门禁同序（.github/workflows/ci.yml five-gates job）。
+# 跳过方式：git commit --no-verify（保留人手路径，仅供临时跳过；正式提交应全部绿）。
+#
+# 五道门禁（任一非 0 即整体失败，与 CI 一致）：
+#   1. moon check --deny-warn
+#   2. moon build
+#   3. moon test
+#   4. moon fmt --check
+#   5. moon info && git diff --exit-code -- pkg.generated.mbti cmd/main/pkg.generated.mbti
+set -e
 
-moon check
+moon check --deny-warn
+moon build
+moon test
+moon fmt --check
+moon info
+git diff --exit-code -- pkg.generated.mbti cmd/main/pkg.generated.mbti
+
+echo "pre-commit: 五道门禁全绿"
