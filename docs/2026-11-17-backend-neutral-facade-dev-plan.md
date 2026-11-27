@@ -37,7 +37,7 @@
 | B3 | 已实现：8 个错误变体逐个数清且测试显式簿记 **8/8**（每变体均有直接变体名断言用例）；无死变体 | `pose.mbt` L268–277；`pkg.generated.mbti` L25–34；`pose_test.mbt` / `pose_wbtest.mbt` 变体名 Grep |
 | B4 | 已实测：测试 **62/62**（黑盒 40 + 白盒 22）；`#skip` 全仓 0 条；native 目标 62/62、退出 0（附沙箱提示，未复跑） | `moon test` / `moon test --target native` 2026-11-17 实跑；`grep -c '^test "'` = 40 + 22 |
 | B5 | 已实测：五门禁全绿；双快照 `moon info` 前后 SHA-256 分别为 `3bc2a78d…cad`/`6d7651f9…fcc`，diff 退出 0；工具链版本与 CI 锁定一致 | 2026-11-17 五门禁实跑记录；`moon version --all`；`.github/workflows/ci.yml` L42–46 |
-| B6 | 漂移（计数）：`git rev-list --count HEAD` = **17**，仓库外申报口径写 16；本模块 README 未记提交数，差异仅登记不回写 | 2026-11-17 `git rev-list --count HEAD`；仓库外申报口径仅作线索 |
+| B6 | 漂移（计数）：提交数易随新提交增长，统一以 `git rev-list --count HEAD` 实测；历史申报口径仅作线索，不回写 | 复验时执行 `git rev-list --count HEAD` |
 | B7 | 已实现：零第三方依赖、零模型/`.so` 入库、零 `tests/fixtures` 资产（全部测试为程序化字节构造）；`cmd/main` 为模板（仅 `println("Hello")`），无 CLI 契约 | `moon.mod` 无 import 块；目录实测；`cmd/main/main.mbt` L1–7；LICENSE = Apache-2.0 |
 | B8 | 已实现（F1）：`pub(open) trait PoseBackend` 四方法冻结；包外 Mock/Alt 两替身与包内 `TfliteAdapter` 三实现证明可替换；`detect` 对三后端调用签名不变 | `pose.mbt` L100–105；`pose_test.mbt` L165–241、L328–350、L1411–1432 |
 | B9 | 已实现（F2）：`detect` 委托 `detect_multi`，返回 NMS 后首姿态；空输出/全阈值过滤返回零检测空结果（score 0、`backend=kind()`），非报错；多姿态按 score 降序返回 | `pose.mbt` L1108–1127、L1141–1177；`pose_test.mbt` L482–496、L1201–1230、L1277–1295 |
@@ -62,7 +62,7 @@ F# → B# 覆盖：F1→B8；F2→B9；F3→B10；F4→B11；F5→B12；F6→B13
 
 **对历史口径的修正**（以 2026-11-17 实测为准）：
 
-1. 提交数：仓库外申报口径 16 → 实测 **17**（B6；申报材料在仓库外，不回写）。
+1. 提交数：不固定易漂移数字，统一以 `git rev-list --count HEAD` 实测为准（B6；申报材料在仓库外，不回写）。
 2. README API 索引并非完整 pub 面：漏 `FrameId` 类型别名（B2）。
 3. README「唯一说明文档」在 docs/ 交付后失效（B20）。
 4. `detect_multi` 空张量语义：源码注释仍写 `OutputDecode`，代码与测试已是零检测空结果（B19）。

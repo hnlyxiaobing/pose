@@ -6,8 +6,8 @@
 ## Docs
 - Dev plan: `docs/2026-11-17-backend-neutral-facade-dev-plan.md`
 - Test-system design: `docs/2026-11-17-test-system-design.md`
-- CHANGELOG: `docs/CHANGELOG.md` (W1 created; W1 + W3 entries recorded)
-- Stale doc references (`docs/API.md`, `docs/DECISIONS.md`) removed in W1 — no longer referenced anywhere.
+- CHANGELOG: `docs/CHANGELOG.md` (W1 created; entries recorded for historical W5-A/W6-A, W1, W3, W2, W4, and W5 close-out)
+- Former design-doc paths removed in W1 — no live references remain; stale path names are intentionally omitted from this card.
 
 ## Gates (authoritative list per dev-plan §1 & test-design §9)
 Five gates (wasm):
@@ -40,7 +40,7 @@ Five gates (wasm):
 - ALL WORK PACKAGES W1–W6 DELIVERED 2026-11-27
 
 ## Measured state (verified 2026-11-27)
-- HEAD: 6b7ffc5/f3fd66f (W4) → close-out commit pending
+- HEAD includes W4 and the 2026-11-27 close-out (selfcheck + scan negative control + CI `meta-contract` job); close-out committed, not pending.
 - `moon test`: 88/88 (wasm) and 88/88 (native), 0 skip
 - All five gates green; `bash tools/verify.sh` → exit 78 = all green except real oracle diff SKIPPED (oracle `--selfcheck` PASS)
 - Snapshot: W4 pure addition (5 new pub decls); error variants still 8; close-out adds no pub (snapshot unchanged)

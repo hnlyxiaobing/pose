@@ -60,7 +60,7 @@ R  真实样本本地 runner（仓库外路径 + SHA-256 门禁 + 显式 SKIPPED
 | F-A 程序化构造 | 测试代码字节 builder（`raw_of`/`raw_uniform`/`spec_of`/`white_image`） | 是 | 随仓库 | 已实现（B7）；测试内 builder 真实消费 |
 | F-B 受控文件 fixture | `tests/fixtures/*` | 是 | 哈希登记（当前无登记文件） | 当前无目录、无死资产（B7）；W2 仍走 F-C 程序化自产，故未建文件 fixture |
 | F-C 生成器资产 | 确定性 builder（golden builder / 变异种子） | 是 | 自产 | W2 已落地：`pose_golden_test.mbt` + `tests/golden/README.md` 登记 + `scan_mutations` 固定种子 |
-| F-D 真实第三方样本/模型 | 仓库外本地路径 | 否（红线） | 许可不明 | W5 待裁决；仅 R runner + 显式 SKIPPED |
+| F-D 真实第三方样本/模型 | 仓库外本地路径 | 否（红线） | 许可不明 | W5 已裁决 A 并落地 runner；仅 R runner + 显式 SKIPPED |
 
 红线：F-D 永不入库；golden 字节变更须同步登记 + 黄金记录（防样本漂移假绿）；外部申报材料不进入本仓库测试路径或文档引用。
 builder 能力清单：`spec_of(w,h,ch,dtype,mean,std,landmark_count)` 覆盖尺寸/通道/5 dtype/均值方差/关键点数；`config_with`/`config_nms` 覆盖 keep_aspect_ratio/pad/score/nms/max_poses/mirror；输出张量 builder 覆盖 0 块、1 块、多块、非整数块、NaN/Inf 分量、极值归一化坐标；图像 builder 覆盖 RGB/BGR/RGBA/BGRA、尺寸与数据长度不符、极端尺寸（W3）。
@@ -82,7 +82,7 @@ builder 能力清单：`spec_of(w,h,ch,dtype,mean,std,landmark_count)` 覆盖尺
 
 | oracle | 差分对象 | 规范化口径 |
 |---|---|---|
-| 外部推理运行时（W5 待裁决，具体名称由用户确认） | 本库 `letterbox` 输出字节与 `decode_output` 关键点值；只比双方共同声明的浮点字段，不比引擎内部中间张量/下游语义 | 逐元素绝对误差 <1e-4；输入图像、模型规格、dtype、归一化参数登记在报告中 |
+| 外部推理运行时（W5 已裁决 A；具体模型/运行时由用户侧合法提供） | 本库 `letterbox` 输出字节与 `decode_output` 关键点值；只比双方共同声明的浮点字段，不比引擎内部中间张量/下游语义 | 逐元素绝对误差 <1e-4；输入图像、模型规格、dtype、归一化参数登记在报告中 |
 | 第二后端（第二引擎/第二实现，属组合根） | 同一 raw 下 `detect` 的 `PoseResult` 值字段，忽略 `backend` 标注 | 逐字段相等（容差按 A6 口径）；缺失→SKIPPED |
 
 纪律：oracle 缺失 → 显式 SKIPPED + 原因（退出码 78 口径），不得写成通过；oracle 版本/模型 SHA-256 随结果登记。R runner：样本路径 + 登记哈希 → 哈希不符拒绝执行 → 规范化差分 → 报告「本地已差分 + 哈希 + 日期」；入库占位用例保留不删，真实结论永不进入通过计数。
@@ -184,7 +184,7 @@ C 行已含防火墙（C2）与许可红线（C3）两行。
 | T-W6-2 裁决 A：快照纯加法（+7 行）、错误变体仍 8 个 | W6（A 已落地 ✓） | C4、F7 | A5/L5 |
 | T-W6-3 裁决 B 存档（未采纳） | W6（B 未采纳） | F1 | A5/L5 |
 
-未裁决包对应行保持「未实现/待裁决」标注，不预写通过。
+W5/W6 均已裁决并采纳 A；未采纳的 B 选项仅作历史存档，不表示当前仍待裁决。
 
 ## 7. L4 CLI 场景 E2E
 
@@ -208,7 +208,7 @@ C 行已含防火墙（C2）与许可红线（C3）两行。
 1. 快照门禁：`moon info` + `git diff --exit-code -- pkg.generated.mbti cmd/main/pkg.generated.mbti`（纯加法，快照随源码同提交）。
 2. 双目标等价：同一程序化 builder 在 wasm/native 跑同输入，值输出逐字节 diff=0（浮点容差按 §5 登记）。
 3. 错误簿记门禁：§6.2 的 8 变体 ↔ 测试代码显式变体名断言双向核对，缺一即红；新增触发语料不新增变体。
-4. 变异自检：(a) **固定种子字节变异扫描已自动化**——`scan_mutations` 生成 ≥1000 个替换/插入/删除变异体并断言只落在声明错误集合（随 `moon test` 绿色，W2 已落地）；(a2) **扫描器负对照已自动化（2026-11-27）**——`decode_capture_allowed` 的允许集合判定加负对照：集合内 4 变体判 true、集合外 4 变体必须判 false、成功路径判 true，证明扫描断言非空转；(b) **缺陷注入自检**（人工纪律）——改动 NMS 抑制 / 镜像位翻转 / Float16 RNE 对应逻辑时，临时注入 3 类缺陷（NMS 跳过抑制 / 镜像漏做 / RNE 改向零截断），确认套件变红后还原复绿；该项尚未自动化，属发布前人工复核项。
+4. 变异自检（区分三类证据，不称全自动）：(a) **文本扫描门禁已自动化**——`tools/verify.sh` 对错误变体名、引用实存性等做静态核对；(a2) **机制自检已自动化**——`tools/numeric-oracle.sh --selfcheck` 用确定性自产探针验证 oracle runner 契约，扫描器负对照另由 `decode_capture_allowed` 测试证明断言非空转；(b) **人工缺陷注入尚未自动化**——改动 NMS 抑制 / 镜像位翻转 / Float16 RNE 对应逻辑时，临时注入 3 类缺陷（NMS 跳过抑制 / 镜像漏做 / RNE 改向零截断），确认套件变红后还原复绿；该项属发布前人工复核项。
 5. 计数纪律：`#skip` 不计通过；过滤串以 `*` 结尾防空转假绿；SKIPPED 与退出码 78 单列报告。
 6. 引用实存性扫描：`.mbt/.md/.yml/.sh/.ps1` 注释与文案引用的仓库内路径全部实存；README API 索引与快照逐条一致（含类型别名/方法/trait）；无工作区路径与兄弟模块符号。
 7. 本地钩子一致性：`.githooks/pre-commit` 与 CI 五门禁同序（W1 后）。
@@ -240,4 +240,4 @@ Windows 下 moon 把进度写 stderr，以退出码与 `Total tests: N, passed: 
 4. 每包合入 ⇒ 开发文档 DoD 勾选 + 矩阵现状刷新 + CHANGELOG 测试增量。
 5. 「通过」须可复验：命令 + 日期 + 计数；SKIPPED 永远单列。
 
-落地验收：L0 ✓（88 条实跑）、L1 ✓（截断扫描 + 固定种子 1000 变异体 + 扫描器负对照）、L2 ✓（8 条 golden + `tests/golden/README.md` 登记）、L3 ◐（W5-A runner 机制已由 `--selfcheck` 端到端验证；真实模型差分需用户侧提供仓库外合法模型，缺省显式 SKIPPED）、L4 ✓（库级 E2E，无 CLI）、L5 ✓（快照/错误簿记 8/8/双目标等价/变异自检/引用实存性/oracle 机制自检由 `tools/verify.sh` 门禁化）、R ✗（零入库样本；W5-A 本地可选）；W1–W6 全部落地（W5/W6 裁决 A）。
+落地验收：L0 ✓（88 条实跑）、L1 ✓（截断扫描 + 固定种子 1000 变异体 + 扫描器负对照）、L2 ✓（8 条 golden + `tests/golden/README.md` 登记）、L3 ◐（W5 已裁决 A，runner 机制已由 `--selfcheck` 端到端验证；真实模型差分需用户侧提供仓库外合法模型，缺省显式 SKIPPED）、L4 ✓（库级 E2E，无 CLI）、L5 ✓（快照/错误簿记 8/8/双目标等价/引用实存性/oracle 机制自检由 `tools/verify.sh` 门禁化；人工缺陷注入仍为人工复核，不得称全自动）、R ✗（零入库样本；W5-A 本地可选）；W1–W6 全部落地（W5/W6 已裁决并采纳 A）。
