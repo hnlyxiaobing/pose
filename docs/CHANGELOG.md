@@ -14,6 +14,21 @@
 
 ---
 
+## W3 · fail-closed 输入加固（2026-11-27）
+
+- **工作包**：W3（P1/S，dev-plan §5 W3）。
+- **新增 pub 声明**：无（`pkg.generated.mbti` 快照 diff 为空）。
+- **快照 diff**：空（`pkg.generated.mbti` 与 `cmd/main/pkg.generated.mbti` 均无变化）。
+- **测试增量**：+3（`moon test` 64/64 → 67/67，零 `#skip`）。
+- **要点**（三项 fail-closed 修复，如 dev-plan §5 W3 所述）：
+  - `nms` 入口逐候选校验 `score` 与 `bbox` 四坐标 `is_finite()`，非有限即 `InvalidConfig`（关闭 B22 非有限候选导致 fail-open 的静默放行）。
+  - `letterbox`/`letterbox_stretch` 数据长度改用 `to_int64()` 中间量校验，`letterbox_plan` 与 `resize_encode` 的缩放/采样算术改为 Int64 中间量（关闭 B23 `w*h*src_ch` 与采样偏移的 Int32 乘法回绕）。
+  - `detect_multi` 预算改为 `block.to_int64() * max_poses.to_int64()`，并在 `validate_spec_and_config` 与 `nms` 增加 `max_poses` 上界（`max_poses_upper_bound = 65536`）拒绝极端值（关闭预算回绕成负值）。
+  - 仅非有限候选 / 极端尺寸 / 极端 `max_poses` 样本改变行为；原 62 用例零改动全绿（防火墙）。
+- **仓库外申报口径**：不回写；仅记录本仓库 git 实测。
+
+---
+
 <!-- 后续工作包在此追加登记。模板： -->
 <!--
 ## W? · 标题（YYYY-MM-DD）

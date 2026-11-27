@@ -120,12 +120,12 @@ C 行已含防火墙（C2）与许可红线（C3）两行。
 |---|---|---|
 | `BackendNotOpen` | ✓ 未 open 调 `infer` / `close` / `detect`；Mock 与适配器双通道 | 无 |
 | `BackendFailure` | ✓ 注入 invoke 失败、主/回退皆缺、重复 open、显式 `(kind, detail)` 断言 | 无 |
-| `InvalidConfig` | ✓ 零 std / 越界阈值 / pad 越界 / 非法 Transform / 超大 spec / 非法 nms 阈值 | 非有限候选（W3）、极端 `max_poses`（W3） |
-| `InvalidInput` | ✓ 图像尺寸与数据长度不符、非法 Transform 源尺寸、显式 `(w,h)` 断言 | 极端尺寸 Int64 判定（W3）、ROI 越界（W4） |
+| `InvalidConfig` | ✓ 零 std / 越界阈值 / pad 越界 / 非法 Transform / 超大 spec / 非法 nms 阈值 | ✓ 非有限候选、极端 `max_poses`（W3 已落地） |
+| `InvalidInput` | ✓ 图像尺寸与数据长度不符、非法 Transform 源尺寸、显式 `(w,h)` 断言 | ✓ 极端尺寸 Int64 判定（W3）；ROI 越界（W4 待建） |
 | `OutputDecode` | ✓ NaN y / NaN score 输出张量，白盒 + 黑盒双通道 | 位翻转语料（W2） |
 | `ShapeMismatch` | ✓ 单块/批处理字节数不符、适配器输入/输出长度不符，显式 `(expected,actual)` 断言 | 截断扫描（W2） |
 | `UnsupportedModel` | ✓ 非 3 通道模型输入（letterbox 与 stretch 两路径） | 无 |
-| `BudgetExceeded` | ✓ 34 块 > `max_poses=1`、3 块 > `max_poses=2` | 极端预算回绕回归（W3） |
+| `BudgetExceeded` | ✓ 34 块 > `max_poses=1`、3 块 > `max_poses=2` | ✓ 极端预算回绕回归（W3 已落地） |
 
 显式簿记 **8/8**（2026-11-17 实测，每变体均有直接变体名断言，无死变体）；W3/W4 只增加触发语料，不新增变体。
 
@@ -143,30 +143,30 @@ C 行已含防火墙（C2）与许可红线（C3）两行。
 
 | 用例 | 位置 | 原因 |
 |---|---|---|
-| （无） | — | 当前基线零 `#skip`（2026-11-17 实测：`moon test` **64/64**，含 W6-A 新增 2 条异步防火墙用例；脚本层 SKIPPED 见下） |
+| （无） | — | 当前基线零 `#skip`（2026-11-27 实测：`moon test` **67/67**，含 W6-A 新增 2 条异步防火墙用例与 W3 新增 3 条 fail-closed 用例；脚本层 SKIPPED 见下） |
 
-计数口径：64 条声明（黑盒 42 + 白盒 22）− 0 条 `#skip` = 64 执行（2026-11-17，wasm）；W5-A 的 `tools/numeric-oracle.sh` 在缺模型/缺比较命令时以退出码 78 SKIPPED，属脚本层独立口径，永不进入 `moon test` 通过计数。
+计数口径：67 条声明（黑盒 42 + 白盒 25）− 0 条 `#skip` = 67 执行（2026-11-27，wasm）；W5-A 的 `tools/numeric-oracle.sh` 在缺模型/缺比较命令时以退出码 78 SKIPPED，属脚本层独立口径，永不进入 `moon test` 通过计数。
 
 ### 6.5 验收 ID 双向追溯表
 
 | `T-W*-*` | W#（开发文档） | 矩阵缺口行 | 断言/层 |
 |---|---|---|---|
-| T-W1-1 引用实存性扫描零失效 | W1 | C4、F9 | A5/L5 |
-| T-W1-2 README 索引 ↔ mbti 逐条一致（含类型别名） | W1 | C4 | A5/L5 |
-| T-W1-3 五门禁绿 + 双快照 diff 空 | W1 | C4 | A5/L5 |
-| T-W1-4 CHANGELOG 建立并登记 | W1 | C4 | A5/L5 |
-| T-W1-5 本地钩子序列与 CI 一致 | W1 | C4 | A5/L5 |
+| T-W1-1 引用实存性扫描零失效 | W1（已落地 ✓） | C4、F9 | A5/L5 |
+| T-W1-2 README 索引 ↔ mbti 逐条一致（含类型别名） | W1（已落地 ✓） | C4 | A5/L5 |
+| T-W1-3 五门禁绿 + 双快照 diff 空 | W1（已落地 ✓） | C4 | A5/L5 |
+| T-W1-4 CHANGELOG 建立并登记 | W1（已落地 ✓） | C4 | A5/L5 |
+| T-W1-5 本地钩子序列与 CI 一致 | W1（已落地 ✓） | C4 | A5/L5 |
 | T-W2-1 golden 集入库且被测试真实读取 | W2 | F1–F5、S1 | A1/L2 |
 | T-W2-2 dtype/Float16 边界性质全绿 | W2 | F3 | A1/A6/L1 |
 | T-W2-3 截断 + ≥1000 变异无 panic | W2 | C1、F4 | A4/L1 |
 | T-W2-4 wasm/native 值输出 diff=0 | W2 | F5、C2 | A6/L5 |
 | T-W2-5 旧 62 用例零改动全绿（防火墙） | W2 | C2 | A5/L5 |
 | T-W2-6 错误簿记 8/8 门禁化 | W2 | F7 | A2/L5 |
-| T-W3-1 NaN/Inf score 与 bbox → `InvalidConfig` | W3 | F4、S2 | A2/L0 |
-| T-W3-2 极端尺寸图像 → `InvalidInput`，无越界读 | W3 | C1、F3 | A4/L0+L1 |
-| T-W3-3 极端 `max_poses` → `InvalidConfig` 且预算不回绕 | W3 | F8 | A4/L0 |
-| T-W3-4 防火墙：旧 62 用例零改动全绿 | W3 | C2 | A5/L5 |
-| T-W3-5 截断/变异扫描无 panic | W3 | C1 | A4/L1 |
+| T-W3-1 NaN/Inf score 与 bbox → `InvalidConfig` | W3（已落地 ✓） | F4、S2 | A2/L0 |
+| T-W3-2 极端尺寸图像 → `InvalidInput`，无越界读 | W3（已落地 ✓） | C1、F3 | A4/L0+L1 |
+| T-W3-3 极端 `max_poses` → `InvalidConfig` 且预算不回绕 | W3（已落地 ✓） | F8 | A4/L0 |
+| T-W3-4 防火墙：旧 62 用例零改动全绿 | W3（已落地 ✓，64/64） | C2 | A5/L5 |
+| T-W3-5 截断/变异扫描无 panic | W3（依赖 W2 扫描驱动） | C1 | A4/L1 |
 | T-W4-1 ROI 边界（贴边/越界/零尺寸）断言 | W4 | F10 | A4/L0 |
 | T-W4-2 ROI=全图时数值等价 | W4 | F10、C2 | A1/L1 |
 | T-W4-3 旧 `detect` 在既有语料上逐字节不变 | W4 | C2 | A5/L5 |
@@ -233,4 +233,4 @@ Windows 下 moon 把进度写 stderr，以退出码与 `Total tests: N, passed: 
 4. 每包合入 ⇒ 开发文档 DoD 勾选 + 矩阵现状刷新 + CHANGELOG 测试增量。
 5. 「通过」须可复验：命令 + 日期 + 计数；SKIPPED 永远单列。
 
-落地验收：L0 ✓（64 条实跑）、L1 ◐（点状，W2/W3 补齐）、L2 ✗（W2 待建）、L3 ◐（W5-A runner 已落地，缺外部模型时显式 SKIPPED；真实差分未跑）、L4 ✓（库级 E2E，无 CLI）、L5 ◐（快照与计数已验，簿记门禁/双目标差分/变异自检待 W2）、R ✗（零入库样本；W5-A 本地可选）；W5/W6 已裁决 A，不再列为待裁决项。
+落地验收：L0 ✓（67 条实跑，W3 已补齐 fail-closed 用例）、L1 ◐（点状，W2/W3 补齐；W3 部分已落地）、L2 ✗（W2 待建）、L3 ◐（W5-A runner 已落地，缺外部模型时显式 SKIPPED；真实差分未跑）、L4 ✓（库级 E2E，无 CLI）、L5 ◐（快照与计数已验，簿记门禁/双目标差分/变异自检待 W2）、R ✗（零入库样本；W5-A 本地可选）；W5/W6 已裁决 A，不再列为待裁决项。

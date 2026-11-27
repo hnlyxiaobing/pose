@@ -406,6 +406,11 @@ pub(all) struct StretchTransform {
 }
 
 ///|
+/// `max_poses` 上界：超过即 `InvalidConfig`。用于 fail-closed 防止病态 NMS
+/// （`kept` 数组与逐候选扫描随 `max_poses` 增长）与极端预算配置（W3/B23）。
+let max_poses_upper_bound : Int32 = 65536
+
+///|
 /// 校验 ModelSpec 的参数域（纯函数）。后端适配器在 open/infer 前复用本校验，
 /// 保证畸形规格以 `InvalidConfig` 报出而不是在整数除法处 panic。
 fn validate_spec(spec : ModelSpec) -> Unit raise PoseError {
@@ -470,6 +475,11 @@ fn validate_spec_and_config(
   if config.max_poses <= 0 {
     raise InvalidConfig("PoseConfig.max_poses must be positive")
   }
+  if config.max_poses > max_poses_upper_bound {
+    raise InvalidConfig(
+      "PoseConfig.max_poses exceeds upper bound \{max_poses_upper_bound}",
+    )
+  }
 }
 
 ///|
@@ -493,15 +503,19 @@ fn letterbox_plan(
   tw : Int32,
   th : Int32,
 ) -> (Double, Int32, Int32, Int32, Int32) {
-  if tw * h <= th * w {
+  let w64 = w.to_int64()
+  let h64 = h.to_int64()
+  let tw64 = tw.to_int64()
+  let th64 = th.to_int64()
+  if tw64 * h64 <= th64 * w64 {
     // 宽度受限：缩放到 tw
     let scaled_w = tw
-    let scaled_h = h * tw / w
+    let scaled_h = (h64 * tw64 / w64).to_int()
     (tw.to_double() / w.to_double(), scaled_w, scaled_h, 0, (th - scaled_h) / 2)
   } else {
     // 高度受限：缩放到 th
     let scaled_h = th
-    let scaled_w = w * th / h
+    let scaled_w = (w64 * th64 / h64).to_int()
     (th.to_double() / h.to_double(), scaled_w, scaled_h, (tw - scaled_w) / 2, 0)
   }
 }
@@ -710,8 +724,12 @@ fn resize_encode(
         tx < plan.pad_x + plan.scaled_w &&
         ty >= plan.pad_y &&
         ty < plan.pad_y + plan.scaled_h {
-        let sx0 = (tx - plan.pad_x) * w / plan.scaled_w
-        let sy = (ty - plan.pad_y) * h / plan.scaled_h
+        let sx0 = ((tx - plan.pad_x).to_int64() *
+        w.to_int64() /
+        plan.scaled_w.to_int64()).to_int()
+        let sy = ((ty - plan.pad_y).to_int64() *
+        h.to_int64() /
+        plan.scaled_h.to_int64()).to_int()
         let sx = if config.mirror_x { w - 1 - sx0 } else { sx0 }
         read_rgb_into(image, sx, sy, values)
       } else {
@@ -767,7 +785,8 @@ pub fn letterbox(
     raise InvalidInput(w, h)
   }
   let src_ch = layout_channels(image.layout)
-  if image.data.length() != w * h * src_ch {
+  if w.to_int64() * h.to_int64() * src_ch.to_int64() !=
+    image.data.length().to_int64() {
     raise InvalidInput(w, h)
   }
   let tw = spec.input_width
@@ -822,7 +841,8 @@ pub fn letterbox_stretch(
     raise InvalidInput(w, h)
   }
   let src_ch = layout_channels(image.layout)
-  if image.data.length() != w * h * src_ch {
+  if w.to_int64() * h.to_int64() * src_ch.to_int64() !=
+    image.data.length().to_int64() {
     raise InvalidInput(w, h)
   }
   let tw = spec.input_width
@@ -970,6 +990,22 @@ pub fn nms(
   }
   if max_poses <= 0 {
     raise InvalidConfig("nms: max_poses must be positive")
+  }
+  if max_poses > max_poses_upper_bound {
+    raise InvalidConfig(
+      "nms: max_poses exceeds upper bound \{max_poses_upper_bound}",
+    )
+  }
+  // fail-closed（W3/B22）：非有限候选（score 或 bbox 四坐标）立即 `InvalidConfig`，
+  // 不进入排序与 IoU 抑制，避免 NaN 参与比较导致 fail-open（永不抑制）。
+  for c in candidates {
+    if !c.score.is_finite() ||
+      !c.bbox.x1.is_finite() ||
+      !c.bbox.y1.is_finite() ||
+      !c.bbox.x2.is_finite() ||
+      !c.bbox.y2.is_finite() {
+      raise InvalidConfig("nms: non-finite candidate score or bbox")
+    }
   }
   let sorted = candidates.copy()
   let n = sorted.length()
@@ -1150,8 +1186,8 @@ pub fn detect_multi(
   let raw = backend.infer(input)
   // 预算控制：输出张量携带的姿态块数不得超过 max_poses（单姿态布局为 1 块）。
   let block = config.model.landmark_count * 3 * 4
-  let budget = block * config.max_poses
-  if raw.length() > budget {
+  let budget = block.to_int64() * config.max_poses.to_int64()
+  if raw.length().to_int64() > budget {
     raise BudgetExceeded(
       "detect: output tensor \{raw.length()} bytes exceeds max_poses budget \{budget} bytes",
     )

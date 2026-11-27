@@ -1,6 +1,6 @@
 # pose 后端中立姿态门面开发文档
 
-> 建立：2026-11-17 ｜ 状态：待开发 ｜ 适用仓库：本仓库（独立自包含）
+> 建立：2026-11-17 ｜ 状态：进行中（W1/W3 已落地，M2 待落地） ｜ 适用仓库：本仓库（独立自包含）
 > 配套文档：[2026-11-17-test-system-design.md](2026-11-17-test-system-design.md)（验收测试 ID `T-W*-*` 出自该文档）
 > 本文所有「现状」结论均为 2026-11-17 对本仓库源码的实测核对，非转述历史文档。
 > 五门禁 2026-11-17 实跑（开发前基线）：`moon check --deny-warn` 退出 0；`moon build` 退出 0；`moon test` **62/62 通过、0 条 #skip**；`moon fmt --check` 退出 0；`moon info` 后 `git diff --exit-code -- pkg.generated.mbti cmd/main/pkg.generated.mbti` 退出 0（双快照 SHA-256 前后不变）。工具链 moon 0.1.20261104 / moonc v0.10.20+65efd5b93，与 CI 版本锁一致。附加复验：`moon test --target native` 显示 62/62、退出 0（工具回报另附沙箱策略提示，本轮未复跑，逐字节双目标差分仍列缺口 B24）。
@@ -8,6 +8,8 @@
 > 说明：本轮 P1 线索中包含仓库外的申报材料；其计数与「后续」口径一律按 P4 实测重核，本文只以「仓库外申报口径」泛称记录差异，不假定该材料在本仓库可访问、不回写。
 >
 > **裁决落地记录（2026-11-17，用户采纳推荐 A）**：W5-A 已新增 `tools/numeric-oracle.sh` + 空哈希登记（默认无条目，缺库/缺比较命令显式 SKIPPED/78，哈希未登记硬失败，真实结论不进通过计数）；W6-A 已新增 `AsyncPoseBackend` trait 与 `detect_async`/`detect_multi_async`（纯加法 +7 行快照、零新错误变体，旧同步入口逐字节不变），并新增 2 条异步防火墙测试（`moon test` **64/64**）。快照 diff 为纯加法，须与源码同提交。
+>
+> **合入记录（2026-11-27）**：W1（M0）漂移清理与自包含已落地（修复 B2/B17–B21，README 索引与快照逐条一致、pre-commit 补五门禁、新建 CHANGELOG，测试增量 0）；W3（M1）fail-closed 输入加固已落地（关闭 B22/B23，三项 fail-closed 修复按例外登记 CHANGELOG，测试增量 +3）。当前 `moon test` **67/67**、零 `#skip`，五门禁全绿、快照 diff 空（W1/W3 均无新增 pub）。M2（W2 golden+双目标、W4 ROI）待落地。
 
 ## 0. 现状基线（实测核对，开发前必读）
 
@@ -51,8 +53,8 @@
 | B19 | 漂移（注释 vs 代码）：`detect_multi` 文档注释仍称「空输出张量 `OutputDecode`」，实测代码与既有测试均为零检测空数组；与仓库外申报口径记载的后续修正一致 | `pose.mbt` L1139 ↔ L1157 + `decode_pose_batch` L935–937；`pose_test.mbt` L1298–1326 |
 | B20 | 口径待调整：README L4 称「本文件是本仓库唯一说明文档」；本轮两份带日期文档落 `docs/` 后须改为「唯一入口文档」并加 docs 索引（不改 API） | README.md L4；本轮交付物 |
 | B21 | 门覆盖缺口：`.githooks/pre-commit` 仅执行 `moon check`，未覆盖其余四门禁；CI 五门禁完整，本地钩子与 CI 不一致 | `.githooks/pre-commit` L1–2 ↔ `.github/workflows/ci.yml` L96–122 |
-| B22 | 健壮性缺口（nms fail-open）：`PoseCandidate` 为 `pub(all)`，包外可构造 `score=NaN` 或 bbox 含 NaN/Inf 的候选；`nms` 未校验数值有限性，NaN 比较使排序非全序、`iou` 返回 NaN 时 `NaN > threshold` 为假 ⇒ 异常候选永不被抑制 | `pose.mbt` L337–341、L961–999、L309–327（无 `is_finite` 校验） |
-| B23 | 健壮性缺口（整数溢出面）：`letterbox` / `letterbox_stretch` 用 `w*h*src_ch` 的 Int32 乘法判数据长度，`detect_multi` 用 `block*max_poses` 做预算；合法 spec 有上界但源图尺寸与 `max_poses` 无上界，极端值可能回绕后误判长度或预算 | `pose.mbt` L768、L823、L1150–1152；对照 L425–431 的 Int64 防护仅覆盖 spec |
+| B22 | 已修复（W3，2026-11-27）：`nms` 入口逐候选校验 `score` 与 `bbox` 四坐标 `is_finite()`，非有限即 `InvalidConfig("nms: non-finite candidate score or bbox")`（复用既有变体、消息为新增文本）；排序与 IoU 主体不变 | `pose.mbt` L961–999（现入口新增有限性校验） |
+| B23 | 已修复（W3，2026-11-27）：`letterbox`/`letterbox_stretch` 数据长度改用 `to_int64()` 中间量校验，`letterbox_plan` 与 `resize_encode` 缩放/采样算术改 Int64 中间量；`detect_multi` 预算改 `block.to_int64()*max_poses.to_int64()`，`validate_spec_and_config` 与 `nms` 增加 `max_poses_upper_bound=65536` 拒绝极端值 | `pose.mbt` L411–417、L490–507、L691–732、L768/823、L1147–1156 |
 | B24 | 平台等价现状：wasm 62/62；native 62/62、退出 0；但无「同 fixture 双目标逐字节差分」golden，浮点边界（Float16/归一化）尚无跨目标一致性断言 | 2026-11-17 `moon test` + `moon test --target native`；测试文件无目标分支断言 |
 | B25 | 许可与对标线索：仓库外申报口径称 17/33 点布局语义参考公开模型卡（Apache-2.0）且未移植代码；本仓库零第三方代码、零二进制资产，口径仅作线索，不据此声称任何外部文件可访问 | 仓库外申报口径（仅作线索）；`moon.mod`；目录实测 |
 
@@ -220,11 +222,11 @@ pub fn detect_roi(&PoseBackend, RgbImage, PoseConfig, RoiRect, FrameId) -> PoseR
 ## 6. 里程碑与合入顺序
 
 ```text
-M0（第1日）   W1 漂移清理与自包含（零风险文档/注释/CI/钩子）
-M1            W3 fail-closed 输入加固（安全缺口，行为增强例外流程）
-M2            W2 契约 golden + 双目标等价（高价值低成本）与 W4 ROI 防火墙（新能力）
-M3（已落地）  W5 外部 oracle runner（A：哈希登记 + SKIPPED 纪律）
-M4（已落地）  W6 异步后端门面（A：新 trait + 新入口，纯加法）
+M0（第1日，已落地 2026-11-27）  W1 漂移清理与自包含（零风险文档/注释/CI/钩子）
+M1（已落地 2026-11-27）          W3 fail-closed 输入加固（安全缺口，行为增强例外流程）
+M2                            W2 契约 golden + 双目标等价（高价值低成本）与 W4 ROI 防火墙（新能力）
+M3（已落地 2026-11-17）         W5 外部 oracle runner（A：哈希登记 + SKIPPED 纪律）
+M4（已落地 2026-11-17）         W6 异步后端门面（A：新 trait + 新入口，纯加法）
 ```
 
 排序判据：先零风险文档、再安全缺口、再高价值低成本、最后安全敏感/大工程与须裁决项；每包独立提交、独立过五门禁；W5/W6 已于 2026-11-17 由用户裁决采纳 A 并落地，不再列为待裁决项。

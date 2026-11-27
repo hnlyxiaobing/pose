@@ -438,3 +438,109 @@ test "validate_spec: 超大输入/关键点数报 InvalidConfig（Int32 溢出�
   assert_true(r1, msg="oversized input tensor must be rejected")
   assert_true(r2, msg="oversized landmark_count must be rejected")
 }
+
+///|
+test "nms: 非有限候选（NaN/Inf score 或 bbox）报 InvalidConfig（T-W3-1 fail-closed）" {
+  let nan = Float::reinterpret_from_int(0x7FC00000).to_double()
+  let inf = Float::reinterpret_from_int(0x7F800000).to_double()
+  // NaN / Inf score（bbox 有限）均须拒绝
+  assert_true(
+    nms_rejects([nms_candidate(nan, 0.0, 0.0, 5.0, 5.0)], 0.5, 2),
+    msg="NaN score must be rejected",
+  )
+  assert_true(
+    nms_rejects([nms_candidate(inf, 0.0, 0.0, 5.0, 5.0)], 0.5, 2),
+    msg="Inf score must be rejected",
+  )
+  // NaN / Inf bbox 坐标（score 有限）均须拒绝
+  assert_true(
+    nms_rejects([nms_candidate(0.9, nan, 0.0, 5.0, 5.0)], 0.5, 2),
+    msg="NaN bbox.x must be rejected",
+  )
+  assert_true(
+    nms_rejects([nms_candidate(0.9, inf, 0.0, 5.0, 5.0)], 0.5, 2),
+    msg="Inf bbox.x must be rejected",
+  )
+  // 合法候选仍放行（防火墙）
+  assert_eq(nms([nms_candidate(0.9, 0.0, 0.0, 5.0, 5.0)], 0.5, 2).length(), 1)
+}
+
+///|
+test "nms / validate: 极端 max_poses 报 InvalidConfig（T-W3-3 上界）" {
+  let cands = [nms_candidate(0.9, 0.0, 0.0, 5.0, 5.0)]
+  // 恰在上界内：放行
+  assert_eq(nms(cands, 0.5, max_poses_upper_bound).length(), 1)
+  // 超过上界：拒绝
+  assert_true(
+    nms_rejects(cands, 0.5, max_poses_upper_bound + 1),
+    msg="max_poses above upper bound must be rejected",
+  )
+  // validate_spec_and_config 同样拒绝超上界 max_poses
+  let spec : ModelSpec = {
+    input_width: 8,
+    input_height: 8,
+    input_channels: 3,
+    input_dtype: Float32,
+    mean: [0.0, 0.0, 0.0],
+    std: [1.0, 1.0, 1.0],
+    landmark_count: 3,
+    output_tensor_index: 0,
+  }
+  let config : PoseConfig = {
+    model: spec,
+    keep_aspect_ratio: true,
+    pad_value: 0,
+    score_threshold: 0.5,
+    nms_threshold: 0.5,
+    max_poses: max_poses_upper_bound + 1,
+    mirror_x: false,
+  }
+  let rejected = try {
+    validate_spec_and_config(config.model, config)
+    false
+  } catch {
+    InvalidConfig(_) => true
+    _ => false
+  }
+  assert_true(rejected, msg="oversized max_poses must be rejected by validate")
+}
+
+///|
+test "letterbox: 极端尺寸图像报 InvalidInput（T-W3-2 Int64 长度校验）" {
+  let spec : ModelSpec = {
+    input_width: 8,
+    input_height: 8,
+    input_channels: 3,
+    input_dtype: Float32,
+    mean: [0.0, 0.0, 0.0],
+    std: [1.0, 1.0, 1.0],
+    landmark_count: 3,
+    output_tensor_index: 0,
+  }
+  let config : PoseConfig = {
+    model: spec,
+    keep_aspect_ratio: true,
+    pad_value: 0,
+    score_threshold: 0.5,
+    nms_threshold: 0.5,
+    max_poses: 1,
+    mirror_x: false,
+  }
+  // 100000 × 100000 的 Rgb 尺寸：`w*h*src_ch` 在 Int32 会回绕成负数，
+  // 在 Int64 下 = 30'000'000'000，与空 data 长度不符 ⇒ InvalidInput，且不越界读。
+  let extreme : RgbImage = {
+    width: 100000,
+    height: 100000,
+    layout: Rgb,
+    data: Bytes::make(0, b'\x00'),
+    timestamp_ns: 0UL,
+  }
+  let r = try {
+    let _ = letterbox(extreme, config)
+    false
+  } catch {
+    InvalidInput(_, _) => true
+    _ => false
+  }
+  assert_true(r, msg="extreme-size image must be rejected as InvalidInput")
+}
