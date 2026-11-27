@@ -9,7 +9,7 @@
 >
 > **裁决落地记录（2026-11-17，用户采纳推荐 A）**：W5-A 已新增 `tools/numeric-oracle.sh` + 空哈希登记（默认无条目，缺库/缺比较命令显式 SKIPPED/78，哈希未登记硬失败，真实结论不进通过计数）；W6-A 已新增 `AsyncPoseBackend` trait 与 `detect_async`/`detect_multi_async`（纯加法 +7 行快照、零新错误变体，旧同步入口逐字节不变），并新增 2 条异步防火墙测试（`moon test` **64/64**）。快照 diff 为纯加法，须与源码同提交。
 >
-> **合入记录（2026-11-27）**：W1（M0）漂移清理与自包含已落地（修复 B2/B17–B21，README 索引与快照逐条一致、pre-commit 补五门禁、新建 CHANGELOG，测试增量 0）；W3（M1）fail-closed 输入加固已落地（关闭 B22/B23，三项 fail-closed 修复按例外登记 CHANGELOG，测试增量 +3）。当前 `moon test` **67/67**、零 `#skip`，五门禁全绿、快照 diff 空（W1/W3 均无新增 pub）。M2（W2 golden+双目标、W4 ROI）待落地。
+> **合入记录（2026-11-27）**：W1（M0）漂移清理与自包含已落地（修复 B2/B17–B21，README 索引与快照逐条一致、pre-commit 补五门禁、新建 CHANGELOG，测试增量 0）；W3（M1）fail-closed 输入加固已落地（关闭 B22/B23，三项 fail-closed 修复按例外登记 CHANGELOG，测试增量 +3）；W2（M2）契约 golden 与双目标等价已落地（新建 `pose_golden_test.mbt` 8 条 golden、`tests/golden/README.md` 登记、`pose_wbtest.mbt` 截断/变异扫描、`tools/verify.sh` 元契约 runner；关闭 B4/B24 的 golden 与双目标缺口，测试增量 +11）。当前 `moon test` **78/78**（wasm/native 双目标均 78/78）、零 `#skip`，五门禁全绿、快照 diff 空（W1/W2/W3 均无新增 pub）。仅剩 W4（ROI 防火墙）待落地。
 
 ## 0. 现状基线（实测核对，开发前必读）
 
@@ -55,7 +55,7 @@
 | B21 | 门覆盖缺口：`.githooks/pre-commit` 仅执行 `moon check`，未覆盖其余四门禁；CI 五门禁完整，本地钩子与 CI 不一致 | `.githooks/pre-commit` L1–2 ↔ `.github/workflows/ci.yml` L96–122 |
 | B22 | 已修复（W3，2026-11-27）：`nms` 入口逐候选校验 `score` 与 `bbox` 四坐标 `is_finite()`，非有限即 `InvalidConfig("nms: non-finite candidate score or bbox")`（复用既有变体、消息为新增文本）；排序与 IoU 主体不变 | `pose.mbt` L961–999（现入口新增有限性校验） |
 | B23 | 已修复（W3，2026-11-27）：`letterbox`/`letterbox_stretch` 数据长度改用 `to_int64()` 中间量校验，`letterbox_plan` 与 `resize_encode` 缩放/采样算术改 Int64 中间量；`detect_multi` 预算改 `block.to_int64()*max_poses.to_int64()`，`validate_spec_and_config` 与 `nms` 增加 `max_poses_upper_bound=65536` 拒绝极端值 | `pose.mbt` L411–417、L490–507、L691–732、L768/823、L1147–1156 |
-| B24 | 平台等价现状：wasm 62/62；native 62/62、退出 0；但无「同 fixture 双目标逐字节差分」golden，浮点边界（Float16/归一化）尚无跨目标一致性断言 | 2026-11-17 `moon test` + `moon test --target native`；测试文件无目标分支断言 |
+| B24 | 已补齐（W2，2026-11-27）：wasm 78/78、native 78/78（含 8 条 L2 golden + 截断/变异扫描）；同一 builder/断言双目标各跑一次 ⇒ 值输出逐字节 diff = 0，浮点边界（Float16/归一化）由 golden 断言跨目标一致；`tools/verify.sh` 把 native parity 纳入元契约 | 2026-11-27 `moon test` + `moon test --target native`；`pose_golden_test.mbt`；`tools/verify.sh` |
 | B25 | 许可与对标线索：仓库外申报口径称 17/33 点布局语义参考公开模型卡（Apache-2.0）且未移植代码；本仓库零第三方代码、零二进制资产，口径仅作线索，不据此声称任何外部文件可访问 | 仓库外申报口径（仅作线索）；`moon.mod`；目录实测 |
 
 F# → B# 覆盖：F1→B8；F2→B9；F3→B10；F4→B11；F5→B12；F6→B13；F7→B3；F8→B14；F9→B15；F10→B16。
@@ -143,7 +143,7 @@ F# → B# 覆盖：F1→B8；F2→B9；F3→B10；F4→B11；F5→B12；F6→B13
 - 新建 `docs/CHANGELOG.md`，登记 W1（日期/工作包/新增 pub=无/快照 diff=空/测试增量=0），并注明仓库外申报口径不回写。
 **验收**：T-W1-1 引用实存性扫描零失效；T-W1-2 README 索引 ↔ mbti 逐条一致（含类型别名）；T-W1-3 五门禁绿 + 双快照 diff 空；T-W1-4 CHANGELOG 建立并登记；T-W1-5 钩子序列与 CI 一致。
 
-### W2 门面契约 golden 与双目标等价固化（P1/M）
+### W2 门面契约 golden 与双目标等价固化（P1/M，已落地 2026-11-27）
 
 **目标**：把现有 62 条点状断言升级为可回归的契约资产：绿包 golden、五种 dtype 与 Float16 边界扫描、截断/变异无 panic、wasm/native 逐字节差分、错误簿记门禁化（B4/B24）。
 **非目标**：不改任何 pub API；不把真实运行时引入测试；不新增第三方依赖；不把 #skip 计入通过。
@@ -154,7 +154,7 @@ F# → B# 覆盖：F1→B8；F2→B9；F3→B10；F4→B11；F5→B12；F6→B13
 - 截断扫描：每个 golden 输出张量的全前缀 + 每 12 字节结构边界；只允许 `OutputDecode`/`ShapeMismatch`/`InvalidConfig`/`BudgetExceeded`，无 panic/挂起；固定种子变异 ≥1000 体（替换/插入/删除）。
 - 双目标：同一 builder 在 wasm/native 各跑一次，值输出逐字节 diff=0；浮点差异先定位再定 golden 容差，容差策略写进测试文档 §5（不得默默放宽）。
 - 脚本层 `tools/verify.sh`（仓库自包含）：串起五门禁 + native parity + 变异 + 错误簿记 8/8 + 引用实存性；oracle 缺失显式 SKIPPED。
-**验收**：T-W2-1 golden 集入库且由测试真实读取（非死资产）；T-W2-2 dtype/Float16 边界性质全绿；T-W2-3 截断+≥1000 变异无 panic；T-W2-4 wasm/native 值输出 diff=0；T-W2-5 旧 62 用例零改动全绿（防火墙）；T-W2-6 错误簿记 8/8 门禁化。
+**验收（已达成 ✓，2026-11-27）**：T-W2-1 golden 集入库且由测试真实读取（非死资产，`pose_golden_test.mbt` + `tests/golden/README.md`）；T-W2-2 dtype/Float16 边界性质全绿（5 dtype golden + 既有 22 条 Float16 白盒断言）；T-W2-3 截断+≥1000 变异无 panic（`scan_truncations` / `scan_mutations(1000)`）；T-W2-4 wasm/native 值输出 diff=0（双目标各 78/78）；T-W2-5 旧 62 用例零改动全绿（防火墙，W3 后 67 用例延续）；T-W2-6 错误簿记 8/8 门禁化（`tools/verify.sh`）。
 
 ### W3 fail-closed 输入加固（P1/S）
 
@@ -224,7 +224,7 @@ pub fn detect_roi(&PoseBackend, RgbImage, PoseConfig, RoiRect, FrameId) -> PoseR
 ```text
 M0（第1日，已落地 2026-11-27）  W1 漂移清理与自包含（零风险文档/注释/CI/钩子）
 M1（已落地 2026-11-27）          W3 fail-closed 输入加固（安全缺口，行为增强例外流程）
-M2                            W2 契约 golden + 双目标等价（高价值低成本）与 W4 ROI 防火墙（新能力）
+M2（W2 已落地 2026-11-27）        W2 契约 golden + 双目标等价（高价值低成本）；W4 ROI 防火墙（新能力）待落地
 M3（已落地 2026-11-17）         W5 外部 oracle runner（A：哈希登记 + SKIPPED 纪律）
 M4（已落地 2026-11-17）         W6 异步后端门面（A：新 trait + 新入口，纯加法）
 ```

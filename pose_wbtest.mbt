@@ -506,6 +506,220 @@ test "nms / validate: 极端 max_poses 报 InvalidConfig（T-W3-3 上界）" {
 }
 
 ///|
+/// 固定种子确定性 PRNG（xorshift64）。scan/mutation 语料据此生成，保证可复现。
+struct ScanRng {
+  mut state : UInt64
+}
+
+///|
+fn rng_next(r : ScanRng) -> UInt64 {
+  let mut x = r.state
+  x = x ^ (x << 13)
+  x = x ^ (x >> 7)
+  x = x ^ (x << 17)
+  r.state = x
+  x
+}
+
+///|
+fn rng_byte(r : ScanRng) -> Byte {
+  (rng_next(r) & 0xFF).to_byte()
+}
+
+///|
+fn rng_idx(r : ScanRng, n : Int32) -> Int32 {
+  (rng_next(r) % n.to_uint64()).to_int()
+}
+
+///|
+/// 截断扫描驱动：对 `decode_output` / `decode_pose_batch` 遍历 golden 输出张量的
+/// 全前缀（小样本）与每 12 字节结构边界（抽样）。返回 true 当且仅当所有截断长度
+/// 均无 panic/挂起，且错误只落在允许集合 {OutputDecode, ShapeMismatch, InvalidConfig,
+/// BudgetExceeded} 内。
+fn scan_truncations(raw : Bytes, spec : ModelSpec, config : PoseConfig) -> Bool {
+  let n = raw.length()
+  // 收集需扫描的长度：全前缀（0..=n）。
+  let lens : Array[Int32] = []
+  for i in 0..<=n {
+    lens.push(i)
+  }
+  // 每 12 字节结构边界抽样（b 与 b+1）。
+  let mut b = 12
+  while b < n {
+    lens.push(b)
+    lens.push(b + 1)
+    b = b + 12
+  }
+  for len in lens {
+    let src = raw.to_array()
+    let prefix : Array[Byte] = []
+    for i in 0..<len {
+      prefix.push(src[i])
+    }
+    let cut = Bytes::from_array(prefix)
+    let ok1 = decode_capture_allowed(() => decode_output(cut, spec, config))
+    let ok2 = decode_capture_allowed(() => decode_pose_batch(cut, spec, config))
+    if !(ok1 && ok2) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// 运行一次可 raise 的 decode 表达式，返回 true 当且仅当：成功，或错误落在允许集合内。
+fn[T] decode_capture_allowed(f : () -> T raise PoseError) -> Bool {
+  try {
+    let _ = f()
+    true
+  } catch {
+    OutputDecode(_) => true
+    ShapeMismatch(_, _) => true
+    InvalidConfig(_) => true
+    BudgetExceeded(_) => true
+    _ => false
+  }
+}
+
+///|
+/// 变异扫描驱动：固定种子对 golden 输出张量生成 count 个替换/插入/删除变异体，
+/// 逐一喂给 decode_output / decode_pose_batch。返回 true 当且仅当全部无 panic/挂起，
+/// 且错误只落在允许集合内。
+fn scan_mutations(
+  raw : Bytes,
+  spec : ModelSpec,
+  config : PoseConfig,
+  count : Int32,
+) -> Bool {
+  let rng = ScanRng::{ state: 0x9E3779B97F4A7C15UL, }
+  for _ in 0..<count {
+    let op = rng_idx(rng, 3)
+    let arr = raw.to_array()
+    if op == 0 && arr.length() > 0 {
+      // 替换一个随机字节
+      let i = rng_idx(rng, arr.length())
+      arr[i] = rng_byte(rng)
+    } else if op == 1 {
+      // 插入一个随机字节
+      let i = if arr.length() == 0 { 0 } else { rng_idx(rng, arr.length() + 1) }
+      arr.insert(i, rng_byte(rng))
+    } else if arr.length() > 0 {
+      // 删除一个随机字节
+      let i = rng_idx(rng, arr.length())
+      ignore(arr.remove(i))
+    } else {
+      arr.push(rng_byte(rng))
+    }
+    let body = Bytes::from_array(arr)
+    let ok1 = decode_capture_allowed(() => decode_output(body, spec, config))
+    let ok2 = decode_capture_allowed(() => decode_pose_batch(body, spec, config))
+    if !(ok1 && ok2) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// 17 点 × 3 分量 × 4 字节 = 204 字节确定性输出张量；i==3 处含一个非有限分量以
+/// 覆盖 OutputDecode 分支，其余为 0.5。截断/变异扫描共享 golden 语料。
+fn golden_17pt_raw() -> Bytes {
+  let buf = FixedArray::make(204, b'\x00')
+  for i in 0..<17 {
+    let v = if i == 3 {
+      Float::reinterpret_from_int(0x7FC00000).to_double()
+    } else {
+      0.5
+    }
+    write_f32_le(buf, i * 12, v)
+    write_f32_le(buf, i * 12 + 4, v)
+    write_f32_le(buf, i * 12 + 8, v)
+  }
+  Bytes::from_array(buf)
+}
+
+///|
+test "截断扫描：17 点 golden 输出张量全前缀 + 12 字节边界无 panic（T-W2-3）" {
+  let spec : ModelSpec = {
+    input_width: 192,
+    input_height: 192,
+    input_channels: 3,
+    input_dtype: Float32,
+    mean: [0.0, 0.0, 0.0],
+    std: [255.0, 255.0, 255.0],
+    landmark_count: 17,
+    output_tensor_index: 0,
+  }
+  let config : PoseConfig = {
+    model: spec,
+    keep_aspect_ratio: true,
+    pad_value: 0,
+    score_threshold: 0.0,
+    nms_threshold: 0.5,
+    max_poses: 1,
+    mirror_x: false,
+  }
+  assert_true(
+    scan_truncations(golden_17pt_raw(), spec, config),
+    msg="17 点输出张量截断扫描必须无 panic 且错误落在允许集合",
+  )
+}
+
+///|
+test "变异扫描：固定种子 ≥1000 个替换/插入/删除变异体无 panic（T-W2-3）" {
+  let spec : ModelSpec = {
+    input_width: 192,
+    input_height: 192,
+    input_channels: 3,
+    input_dtype: Float32,
+    mean: [0.0, 0.0, 0.0],
+    std: [255.0, 255.0, 255.0],
+    landmark_count: 17,
+    output_tensor_index: 0,
+  }
+  let config : PoseConfig = {
+    model: spec,
+    keep_aspect_ratio: true,
+    pad_value: 0,
+    score_threshold: 0.0,
+    nms_threshold: 0.5,
+    max_poses: 1,
+    mirror_x: false,
+  }
+  assert_true(
+    scan_mutations(golden_17pt_raw(), spec, config, 1000),
+    msg="≥1000 个固定种子变异体必须全部无 panic 且错误落在允许集合",
+  )
+}
+
+///|
+test "变异扫描：nms 候选注入非有限值必须 InvalidConfig（W3 fail-closed 回归）" {
+  let nan = Float::reinterpret_from_int(0x7FC00000).to_double()
+  let inf = Float::reinterpret_from_int(0x7F800000).to_double()
+  let rng = ScanRng::{ state: 0xD1B54A32D192ED03UL, }
+  let mut all_rejected = true
+  for _ in 0..<100 {
+    let op = rng_idx(rng, 4)
+    let score = if op == 0 { nan } else if op == 1 { inf } else { 0.9 }
+    let mut x1 = 0.0
+    let mut y1 = 0.0
+    if op == 2 {
+      x1 = nan
+    }
+    if op == 3 {
+      y1 = inf
+    }
+    if !nms_rejects([nms_candidate(score, x1, y1, 5.0, 5.0)], 0.5, 2) {
+      all_rejected = false
+    }
+  }
+  assert_true(
+    all_rejected,
+    msg="nms 注入非有限值必须全部被 InvalidConfig 拒绝",
+  )
+}
+
+///|
 test "letterbox: 极端尺寸图像报 InvalidInput（T-W3-2 Int64 长度校验）" {
   let spec : ModelSpec = {
     input_width: 8,

@@ -82,16 +82,18 @@ pub(open) trait AsyncPoseBackend {
 
 - 本库无 CLI；`cmd/main` 为模板。
 - 复验：`moon clean` → `moon check --deny-warn` → `moon build` → `moon test` → `moon fmt --check` → `moon info` 后检查 `pkg.generated.mbti` 无意外 diff。
+- 单一入口（推荐）：`bash tools/verify.sh` —— 仓库自包含地串起五门禁 + `moon test --target native` 双目标等价 + 截断/变异自检 + 错误簿记 8/8 + 引用实存性；外部推理运行时 oracle 缺失时显式 SKIPPED（整体退出码 78 = 除 oracle 外全绿，不计入通过），`--no-native` 可跳过双目标步。
 - 本仓库为独立 Git 仓库，文档与 CI 均自包含，不依赖工作区其他目录。
 
 ## 6. 风险与未决
 
-- P1-b 第二步的 ROI crop 接口尚未交付。
-- 与 Python tflite-runtime 的 <1e-4 逐元素数值对齐未做（本机无 numpy / flatbuffers / tflite_runtime）。
+- P1-b 第二步的 ROI crop 接口尚未交付（计划于 W4）。
+- 与外部推理运行时的 <1e-4 逐元素数值对齐：runner 已建（`tools/numeric-oracle.sh`，仓库外模型路径 + SHA-256 门禁），但本机无外部模型/运行时，真实差分未跑（缺失时显式 SKIPPED，不计入通过）。
 
 ## 7. 文档索引（`docs/`）
 
 - `docs/2026-11-17-backend-neutral-facade-dev-plan.md` —— 后端中立门面开发计划（能力点 F1–F10、硬约束、边界裁决、工作包 W1–W6、里程碑与 DoD）。
 - `docs/2026-11-17-test-system-design.md` —— 测试系统设计（分层 L0–L5、断言 A1–A8、fixture 体系、覆盖矩阵、错误簿记、验收 ID `T-W*-*`）。
 - `docs/CHANGELOG.md` —— 加法性变更登记簿（每工作包：日期 / 新增 pub / 快照 diff / 测试增量）。
+- `tests/golden/README.md` —— L2 golden 语料登记表（builder / 种子 / 精确记录 / 断言位置）。
 
