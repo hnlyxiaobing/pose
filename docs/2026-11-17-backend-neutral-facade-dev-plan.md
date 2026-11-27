@@ -1,6 +1,6 @@
 # pose 后端中立姿态门面开发文档
 
-> 建立：2026-11-17 ｜ 状态：进行中（W1/W3 已落地，M2 待落地） ｜ 适用仓库：本仓库（独立自包含）
+> 建立：2026-11-17 ｜ 状态：已交付（W1–W6 全部落地，2026-11-27） ｜ 适用仓库：本仓库（独立自包含）
 > 配套文档：[2026-11-17-test-system-design.md](2026-11-17-test-system-design.md)（验收测试 ID `T-W*-*` 出自该文档）
 > 本文所有「现状」结论均为 2026-11-17 对本仓库源码的实测核对，非转述历史文档。
 > 五门禁 2026-11-17 实跑（开发前基线）：`moon check --deny-warn` 退出 0；`moon build` 退出 0；`moon test` **62/62 通过、0 条 #skip**；`moon fmt --check` 退出 0；`moon info` 后 `git diff --exit-code -- pkg.generated.mbti cmd/main/pkg.generated.mbti` 退出 0（双快照 SHA-256 前后不变）。工具链 moon 0.1.20261104 / moonc v0.10.20+65efd5b93，与 CI 版本锁一致。附加复验：`moon test --target native` 显示 62/62、退出 0（工具回报另附沙箱策略提示，本轮未复跑，逐字节双目标差分仍列缺口 B24）。
@@ -9,7 +9,7 @@
 >
 > **裁决落地记录（2026-11-17，用户采纳推荐 A）**：W5-A 已新增 `tools/numeric-oracle.sh` + 空哈希登记（默认无条目，缺库/缺比较命令显式 SKIPPED/78，哈希未登记硬失败，真实结论不进通过计数）；W6-A 已新增 `AsyncPoseBackend` trait 与 `detect_async`/`detect_multi_async`（纯加法 +7 行快照、零新错误变体，旧同步入口逐字节不变），并新增 2 条异步防火墙测试（`moon test` **64/64**）。快照 diff 为纯加法，须与源码同提交。
 >
-> **合入记录（2026-11-27）**：W1（M0）漂移清理与自包含已落地（修复 B2/B17–B21，README 索引与快照逐条一致、pre-commit 补五门禁、新建 CHANGELOG，测试增量 0）；W3（M1）fail-closed 输入加固已落地（关闭 B22/B23，三项 fail-closed 修复按例外登记 CHANGELOG，测试增量 +3）；W2（M2）契约 golden 与双目标等价已落地（新建 `pose_golden_test.mbt` 8 条 golden、`tests/golden/README.md` 登记、`pose_wbtest.mbt` 截断/变异扫描、`tools/verify.sh` 元契约 runner；关闭 B4/B24 的 golden 与双目标缺口，测试增量 +11）。当前 `moon test` **78/78**（wasm/native 双目标均 78/78）、零 `#skip`，五门禁全绿、快照 diff 空（W1/W2/W3 均无新增 pub）。仅剩 W4（ROI 防火墙）待落地。
+> **合入记录（2026-11-27）**：W1（M0）漂移清理与自包含已落地（修复 B2/B17–B21，README 索引与快照逐条一致、pre-commit 补五门禁、新建 CHANGELOG，测试增量 0）；W3（M1）fail-closed 输入加固已落地（关闭 B22/B23，三项 fail-closed 修复按例外登记 CHANGELOG，测试增量 +3）；W2（M2）契约 golden 与双目标等价已落地（新建 `pose_golden_test.mbt` 8 条 golden、`tests/golden/README.md` 登记、`pose_wbtest.mbt` 截断/变异扫描、`tools/verify.sh` 元契约 runner；关闭 B4/B24 的 golden 与双目标缺口，测试增量 +11）；W4（M2）ROI 与新布局防火墙已落地（`RoiRect`/`RoiTransform`/`letterbox_roi`/`detect_roi`/`restore_roi` 纯加法，关闭 B16 ROI 缺口，测试增量 +9）。当前 `moon test` **87/87**（wasm/native 双目标均 87/87）、零 `#skip`，五门禁全绿；W4 快照 diff 为纯加法（5 项新增 pub，无删除/改签名，错误变体仍 8 个）。**全部工作包 W1–W6 已交付。**
 
 ## 0. 现状基线（实测核对，开发前必读）
 
@@ -47,7 +47,7 @@
 | B13 | 已实现（F6）：`TfliteAdapter` 三构造入口、主/回退绑定选择、未 open / 重复 open / 重复 close 错误、输入字节数 `ShapeMismatch(expected,actual)`、输出块整数倍校验、绑定失败原样传播；`kind()` 恒为 Tflite | `pose.mbt` L136–262；`pose_test.mbt` L1411–1534 |
 | B14 | 已实现（F8）：`validate_spec` 正数域 + mean/std 长度/有限/非零 + landmark≤1e6 + 输入张量≤256 MiB（Int64 中间量避免溢出）；`validate_spec_and_config` 校验 pad∈[0,255]、阈值∈[0,1]、`max_poses>0`；`detect_multi` 预算 `block*max_poses` 超限即 `BudgetExceeded` | `pose.mbt` L409–471、L1147–1156；`pose_wbtest.mbt` L403–440；`pose_test.mbt` L471–479 |
 | B15 | 已实现（F9）：仓库内无任何后端 import；`TfliteBinding` 由三个 `(PoseConfig)->Unit`、`(Bytes)->Bytes`、`()->Unit` 回调组成，真实解释器由组合根持有 | `pose.mbt` L4–8、L116–120；`moon.pkg`；目录实测 |
-| B16 | 缺口（F10 「后续」逐项核对）：ROI crop 接口未交付（README §6 自述）；与外部运行时逐元素 <1e-4 对齐未做；第二后端与真实引擎接线均属组合根职责、不在本仓库；申报口径中的 NMS 阈值标定属目标应用配置，不是库能力 | README.md L82–83；`pkg.generated.mbti` 无 crop/layout 相关声明；目录实测无模型/依赖 |
+| B16 | 部分补齐（W4，2026-11-27）：ROI crop 接口已交付（`RoiRect`/`RoiTransform`/`letterbox_roi`/`detect_roi`/`restore_roi`，纯加法）；与外部运行时逐元素 <1e-4 对齐仍未做（W5 runner 已建，缺仓库外模型/运行时，显式 SKIPPED）；第二后端与真实引擎接线仍属组合根职责、不在本仓库；申报口径中的 NMS 阈值标定属目标应用配置，不是库能力 | README §6；`pkg.generated.mbti` 新增 5 项 ROI 声明；`pose_roi_test.mbt` |
 | B17 | 漂移（自包含）：`pose.mbt` 注释引用兄弟模块的类型名与具体推理库模块/类型名（L5、L31、L41、L110、L145）；本仓库无对应 import，假定外部代码可访问，违反模块自包含约束（仅注释层，API 与行为不受影响） | `pose.mbt` L4–5、L31、L41、L110、L145 |
 | B18 | 漂移（引用实存性）：源码/测试/CI 共 5 处引用本仓库内不存在的设计文档路径或节号（源码注释 2、测试注释 1、CI 注释 1、CI 失败消息 1）；实测四个疑似文档路径均不存在 | `pose.mbt` L4/L99；`pose_test.mbt` L301；`.github/workflows/ci.yml` L23/L119；目录实测 |
 | B19 | 漂移（注释 vs 代码）：`detect_multi` 文档注释仍称「空输出张量 `OutputDecode`」，实测代码与既有测试均为零检测空数组；与仓库外申报口径记载的后续修正一致 | `pose.mbt` L1139 ↔ L1157 + `decode_pose_batch` L935–937；`pose_test.mbt` L1298–1326 |
@@ -168,11 +168,11 @@ F# → B# 覆盖：F1→B8；F2→B9；F3→B10；F4→B11；F5→B12；F6→B13
 - 三项按 fail-closed 修复例外登记 CHANGELOG；回归语料确认只有非有限候选/极端尺寸/极端 max_poses 样本改变行为，原 62 用例零改动全绿。
 **验收**：T-W3-1 NaN/Inf score 与 bbox → `InvalidConfig`（包外构造候选亦成立）；T-W3-2 极端尺寸图像 → `InvalidInput`，无越界读；T-W3-3 极端 `max_poses` → `InvalidConfig` 且预算不回绕；T-W3-4 防火墙旧 62 用例零改动全绿；T-W3-5 截断/变异扫描无 panic。
 
-### W4 ROI 与新布局防火墙扩展（P2/M）
+### W4 ROI 与新布局防火墙扩展（P2/M，已落地 2026-11-27）
 
 **目标**：落地 README §6 自述未交付的 ROI crop（B16），并把「换关键点布局」限制在新函数新类型内。
 **非目标**：不改 `detect`/`detect_multi`/`letterbox`/`letterbox_stretch` 一行语义；不在本包做图像解码/裁剪分配器以外的语义；不引入第二推理引擎。
-**新增 API（mbti 草案，纯加法）**：
+**新增 API（mbti 草案 → 已落地，纯加法；落地版在草案基础上补 `roi_*` 四字段，否则镜像/ROI 原点无法还原）**：
 
 ```text
 pub(all) struct RoiRect {
@@ -186,16 +186,21 @@ pub(all) struct RoiTransform {
   scale_y : Double
   offset_x : Int32
   offset_y : Int32
+  roi_x : Int32
+  roi_y : Int32
+  roi_width : Int32
+  roi_height : Int32
   source_width : Int32
   source_height : Int32
   mirrored : Bool
 }
 pub fn letterbox_roi(RgbImage, PoseConfig, RoiRect) -> (Bytes, RoiTransform) raise PoseError
 pub fn detect_roi(&PoseBackend, RgbImage, PoseConfig, RoiRect, FrameId) -> PoseResult raise PoseError
+pub fn PoseResult::restore_roi(Self, RoiTransform) -> Self raise PoseError
 ```
 
-**实现要点**：`RoiRect` 越界/非正尺寸 → `InvalidInput(x,y)`（复用既有变体，不新增）；`letterbox_roi` 复用 `resize_encode` 与 W3 的 Int64 长度检查，ROI 坐标进入 `RoiTransform` 由 `restore` 新函数（同包内新入口、不改旧 `restore`）还原；`detect_roi` 复用 `detect_multi` 的预算/NMS 流程，但分派 ROI 前处理；`RoiRect` 为全新 struct，不给 `Transform`/`PoseConfig` 加字段；快照 diff 必须纯加法并登记 CHANGELOG。
-**验收**：T-W4-1 ROI 边界（贴边/越界/零尺寸）断言；T-W4-2 ROI 与全图在 ROI=全图时数值等价（新律）；T-W4-3 旧 `detect` 在既有 62 语料上逐字节不变；T-W4-4 快照 diff 纯加法 + 错误变体仍 8 个；T-W4-5 镜像 + ROI 组合坐标还原断言。
+**实现要点（已落地）**：`RoiRect` 越界/非正尺寸/负原点 → `InvalidInput(x,y)`（复用既有变体，不新增）；`letterbox_roi` = `crop_roi` + 复用 `letterbox` 的整数缩放计划与 `resize_encode`（含 W3 的 Int64 长度检查），ROI 原点与填充进入 `RoiTransform`，由新入口 `PoseResult::restore_roi` 还原（不改旧 `restore`）；`detect_roi` = `crop_roi` + 复用 `detect`（含 letterbox/stretch 分派、预算/NMS、ROI 内坐标还原）+ 平移 ROI 原点；`RoiRect`/`RoiTransform` 为全新 struct，不给 `Transform`/`PoseConfig` 加字段；快照 diff 为纯加法并已登记 CHANGELOG。**已登记限制**：`letterbox_roi` 仅承载等比模式（非等比 ROI 请用 `detect_roi`）。
+**验收（已达成 ✓，2026-11-27）**：T-W4-1 ROI 边界（贴边/越界/零尺寸/负原点）断言；T-W4-2 ROI 与全图在 ROI=全图时数值等价（等比 + stretch 两种模式均断言）；T-W4-3 旧 `detect` 在既有语料上逐字节不变（原 78 用例零改动全绿）；T-W4-4 快照 diff 纯加法 + 错误变体仍 8 个；T-W4-5 镜像 + ROI 组合坐标还原断言（并验证 `detect_roi` 与 `letterbox_roi`+`restore_roi` 代数一致）。
 
 ### W5 外部运行时数值 oracle runner（裁决 A 已落地，P2/L）
 
@@ -224,7 +229,7 @@ pub fn detect_roi(&PoseBackend, RgbImage, PoseConfig, RoiRect, FrameId) -> PoseR
 ```text
 M0（第1日，已落地 2026-11-27）  W1 漂移清理与自包含（零风险文档/注释/CI/钩子）
 M1（已落地 2026-11-27）          W3 fail-closed 输入加固（安全缺口，行为增强例外流程）
-M2（W2 已落地 2026-11-27）        W2 契约 golden + 双目标等价（高价值低成本）；W4 ROI 防火墙（新能力）待落地
+M2（已落地 2026-11-27）          W2 契约 golden + 双目标等价；W4 ROI 防火墙（新能力）
 M3（已落地 2026-11-17）         W5 外部 oracle runner（A：哈希登记 + SKIPPED 纪律）
 M4（已落地 2026-11-17）         W6 异步后端门面（A：新 trait + 新入口，纯加法）
 ```
@@ -241,15 +246,17 @@ M4（已落地 2026-11-17）         W6 异步后端门面（A：新 trait + 新
 
 ## 8. 完成定义（DoD，逐包勾选）
 
-- [ ] 新增 API 与 mbti 草案一致（偏差回写本文）；零新增错误变体
-- [ ] 快照 diff 纯加法（或空），CHANGELOG 已登记
-- [ ] `T-W*-*` 验收全绿；`#skip` 显式标注原因、不计通过
-- [ ] 五门禁全绿；无 CLI 契约意外引入（现状为模板 main）
-- [ ] 防火墙回归：新函数/新包合入后旧 API 在既有语料上输出逐字节不变、旧用例零改动全绿（W1/W5 纯文档脚本包以「旧用例零改动全绿」为准）
-- [ ] 畸形输入（非有限候选、极端尺寸、截断/变异张量）无 panic、无越界
-- [ ] 零新第三方依赖；零许可不明二进制入库
-- [ ] README 能力/非目标/API 索引同步；本文状态行更新「已交付+日期」
-- [ ] 自包含扫描：docs + 代码注释 + 帮助文本 + CI/脚本无工作区路径与兄弟模块符号引用
+> 状态：W1–W6 全部交付（2026-11-27），下列逐项已核验。
+
+- [x] 新增 API 与 mbti 草案一致（偏差回写本文；W4 落地版在草案基础上补 `roi_*` 四字段，已回写）；零新增错误变体（仍 8 个）
+- [x] 快照 diff 纯加法（或空），CHANGELOG 已登记（W1/W2/W3 空；W4/W6 纯加法）
+- [x] `T-W*-*` 验收全绿（W1/W2/W3/W4/W5-A/W6-A）；`#skip` 为 0、无冒充通过
+- [x] 五门禁全绿；无 CLI 契约意外引入（现状为模板 main）
+- [x] 防火墙回归：新函数/新包合入后旧 API 在既有语料上输出逐字节不变、旧用例零改动全绿（W2/W3/W4 均确认）
+- [x] 畸形输入（非有限候选、极端尺寸、截断/变异张量）无 panic、无越界（W3 加固 + W2 扫描）
+- [x] 零新第三方依赖；零许可不明二进制入库
+- [x] README 能力/非目标/API 索引同步；本文状态行更新「已交付+日期」（2026-11-27）
+- [x] 自包含扫描：docs + 代码注释 + 帮助文本 + CI/脚本无工作区路径与兄弟模块符号引用（W1 清理 + `tools/verify.sh` 引用实存性门禁）
 
 ## 9. 风险登记
 

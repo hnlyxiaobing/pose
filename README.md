@@ -1,7 +1,7 @@
 # pose · 姿态估计门面
 
 > 独立发布单元 ｜ L3 感知绑定 ｜ `preferred_target = wasm` ｜ Apache-2.0
-> 状态：`moon test` **64/64** 通过（2026-11-17 本机实测，含 2 条异步门面用例）；带日期的开发/测试文档见 `docs/`，本文件是唯一入口文档。
+> 状态：`moon test` **87/87** 通过（2026-11-27 本机实测，wasm/native 双目标各 87/87，含异步门面 2 条、ROI 9 条、golden/扫描 11 条）；带日期的开发/测试文档见 `docs/`，本文件是唯一入口文档。
 > 公开 API 以 `pkg.generated.mbti` 为准（由 `moon info` 生成，禁手工编辑）；加法性变更须登记 `docs/CHANGELOG.md` + 快照审阅 + 快照门禁。
 
 ## 1. 定位与边界
@@ -13,6 +13,7 @@
 - `PoseBackend` 四方法契约与 `detect(&PoseBackend, …)`
 - `decode_output` 支持 MoveNet 17 点与 MediaPipe/BlazePose 33 点同构布局（由 `ModelSpec.landmark_count` 配置）
 - NMS（稳定降序、IoU 严格大于阈值）、stretch/ROI 缩放、Float16（RNE、NaN `0x7E00`）
+- ROI：`RoiRect` + `letterbox_roi` / `detect_roi` / `PoseResult::restore_roi`（裁剪后前处理与逆变换，纯加法新入口）
 - `TfliteAdapter` / `TfliteBinding` 注入式适配器（三回调），`MockBackend` / `AltBackend` 演示包外可实现
 
 **非目标**
@@ -36,7 +37,9 @@ pub fn decode_output(Bytes, ModelSpec, PoseConfig) -> Array[Landmark] raise Pose
 pub fn decode_pose_batch(Bytes, ModelSpec, PoseConfig) -> Array[PoseCandidate] raise PoseError
 pub fn detect(&PoseBackend, RgbImage, PoseConfig, UInt64) -> PoseResult raise PoseError
 pub fn detect_multi(&PoseBackend, RgbImage, PoseConfig, UInt64) -> Array[PoseResult] raise PoseError
+pub fn detect_roi(&PoseBackend, RgbImage, PoseConfig, RoiRect, UInt64) -> PoseResult raise PoseError
 pub fn letterbox(RgbImage, PoseConfig) -> (Bytes, Transform) raise PoseError
+pub fn letterbox_roi(RgbImage, PoseConfig, RoiRect) -> (Bytes, RoiTransform) raise PoseError
 pub fn letterbox_stretch(RgbImage, PoseConfig) -> (Bytes, StretchTransform) raise PoseError
 pub fn nms(Array[PoseCandidate], Double, Int32) -> Array[PoseCandidate] raise PoseError
 pub(all) suberror PoseError {
@@ -52,9 +55,12 @@ pub fn PoseCandidate::new(Array[Landmark]) -> Self
 pub(all) struct PoseConfig {
 pub(all) struct PoseResult {
 pub fn PoseResult::restore(Self, Transform) -> Self raise PoseError
+pub fn PoseResult::restore_roi(Self, RoiTransform) -> Self raise PoseError
 pub fn PoseResult::restore_stretch(Self, StretchTransform) -> Self raise PoseError
 pub(all) struct RgbImage {
 pub(all) enum RgbLayout {
+pub(all) struct RoiRect {
+pub(all) struct RoiTransform {
 pub(all) struct StretchTransform {
 pub(all) enum TensorDtype {
 pub struct TfliteAdapter {
@@ -87,7 +93,7 @@ pub(open) trait AsyncPoseBackend {
 
 ## 6. 风险与未决
 
-- P1-b 第二步的 ROI crop 接口尚未交付（计划于 W4）。
+- ROI crop 接口已交付（W4，`RoiRect`/`letterbox_roi`/`detect_roi`/`restore_roi`）；`letterbox_roi` 仅承载等比模式（非等比 ROI 用 `detect_roi`，它按 `keep_aspect_ratio` 分派）。
 - 与外部推理运行时的 <1e-4 逐元素数值对齐：runner 已建（`tools/numeric-oracle.sh`，仓库外模型路径 + SHA-256 门禁），但本机无外部模型/运行时，真实差分未跑（缺失时显式 SKIPPED，不计入通过）。
 
 ## 7. 文档索引（`docs/`）

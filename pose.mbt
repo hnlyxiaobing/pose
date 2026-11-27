@@ -1103,6 +1103,211 @@ pub fn PoseResult::restore_stretch(
 }
 
 ///|
+/// 源图 ROI 矩形（源像素坐标：左上角 `x,y` + 宽 `width` 高 `height`）。
+///
+/// 与既有值类型的边界：ROI 是**新增**类型，不给 `Transform`/`PoseConfig` 加字段，
+/// 旧 API 语义不变（W4 防火墙）。
+pub(all) struct RoiRect {
+  x : Int32
+  y : Int32
+  width : Int32
+  height : Int32
+}
+
+///|
+/// ROI 前处理的还原参数：模型输入坐标系 → 源图坐标系。
+///
+/// 等比 ROI（`letterbox_roi`）时 `scale_x == scale_y == Transform.scale`，
+/// `offset_x/offset_y` 为模型帧内填充，`roi_x/roi_y` 为 ROI 在源图中的原点；
+/// `roi_width/roi_height` 为 ROI 尺寸（镜像还原以 ROI 宽为基准），
+/// `source_width/source_height` 为完整源图尺寸。
+pub(all) struct RoiTransform {
+  scale_x : Double
+  scale_y : Double
+  offset_x : Int32
+  offset_y : Int32
+  roi_x : Int32
+  roi_y : Int32
+  roi_width : Int32
+  roi_height : Int32
+  source_width : Int32
+  source_height : Int32
+  mirrored : Bool
+}
+
+///|
+/// ROI 合法性与源图一致性校验：非正尺寸、负原点、越界、数据长度不符均
+/// `InvalidInput(x, y)`（复用既有变体，不新增错误变体）。
+fn validate_roi(image : RgbImage, roi : RoiRect) -> Unit raise PoseError {
+  let w = image.width
+  let h = image.height
+  if w <= 0 || h <= 0 {
+    raise InvalidInput(w, h)
+  }
+  let ch = layout_channels(image.layout)
+  if w.to_int64() * h.to_int64() * ch.to_int64() !=
+    image.data.length().to_int64() {
+    raise InvalidInput(w, h)
+  }
+  if roi.width <= 0 || roi.height <= 0 || roi.x < 0 || roi.y < 0 {
+    raise InvalidInput(roi.x, roi.y)
+  }
+  if roi.x.to_int64() + roi.width.to_int64() > w.to_int64() ||
+    roi.y.to_int64() + roi.height.to_int64() > h.to_int64() {
+    raise InvalidInput(roi.x, roi.y)
+  }
+}
+
+///|
+/// 裁剪 ROI 为新的 `RgbImage`（保留 layout 与 `timestamp_ns`）。
+/// 源偏移用 Int64 中间量计算，与 W3 的 Int32 回绕防护一致。
+fn crop_roi(image : RgbImage, roi : RoiRect) -> RgbImage {
+  let ch = layout_channels(image.layout)
+  let row_bytes = roi.width * ch
+  let out = FixedArray::make(roi.width * roi.height * ch, b'\x00')
+  for ry in 0..<roi.height {
+    let src_row = (
+        (roi.y.to_int64() + ry.to_int64()) * image.width.to_int64() +
+        roi.x.to_int64()
+      ) *
+      ch.to_int64()
+    let dst_row = ry * row_bytes
+    for i in 0..<row_bytes {
+      out[dst_row + i] = image.data[(src_row + i.to_int64()).to_int()]
+    }
+  }
+  {
+    width: roi.width,
+    height: roi.height,
+    layout: image.layout,
+    data: Bytes::from_array(out),
+    timestamp_ns: image.timestamp_ns,
+  }
+}
+
+///|
+/// ROI 前处理：裁出 ROI 后做等比 letterbox，返回模型输入字节与 `RoiTransform`。
+///
+/// - 复用 `letterbox` 的整数缩放计划与采样编码（含 Float16/RNE、归一化、镜像）；
+/// - 仅承载等比模式：`keep_aspect_ratio = false` 时报 `InvalidConfig`
+///   （与 `letterbox` 一致；非等比 ROI 请用 `detect_roi`，它按配置分派）；
+/// - 错误：ROI 非法/越界 `InvalidInput(x, y)`；配置/规格非法 `InvalidConfig`；
+///   非 3 通道 `UnsupportedModel`。
+pub fn letterbox_roi(
+  image : RgbImage,
+  config : PoseConfig,
+  roi : RoiRect,
+) -> (Bytes, RoiTransform) raise PoseError {
+  validate_roi(image, roi)
+  if !config.keep_aspect_ratio {
+    raise InvalidConfig(
+      "letterbox_roi: keep_aspect_ratio=false is not representable by RoiTransform; use detect_roi",
+    )
+  }
+  let cropped = crop_roi(image, roi)
+  let (bytes, t) = letterbox(cropped, config)
+  (
+    bytes,
+    RoiTransform::{
+      scale_x: t.scale,
+      scale_y: t.scale,
+      offset_x: t.pad_x,
+      offset_y: t.pad_y,
+      roi_x: roi.x,
+      roi_y: roi.y,
+      roi_width: roi.width,
+      roi_height: roi.height,
+      source_width: image.width,
+      source_height: image.height,
+      mirrored: t.mirrored,
+    },
+  )
+}
+
+///|
+/// 把关键点从模型输入坐标系经 `RoiTransform` 还原到完整源图坐标系。
+///
+/// - `sx = (x - offset_x) / scale_x`、`sy = (y - offset_y) / scale_y`；
+///   `t.mirrored` 为真时 `x = roi_x + (roi_width - 1 - sx)`（镜像以 ROI 宽为基准）；
+///   否则 `x = roi_x + sx`，`y = roi_y + sy`。
+/// - 纯函数：不修改输入，返回新结果；不夹取坐标。
+/// - 错误：`scale_x/scale_y` 非正（含 NaN）`InvalidConfig`；ROI/源尺寸非法 `InvalidInput`。
+pub fn PoseResult::restore_roi(
+  self : PoseResult,
+  t : RoiTransform,
+) -> PoseResult raise PoseError {
+  if !(t.scale_x > 0.0) || !(t.scale_y > 0.0) {
+    raise InvalidConfig("RoiTransform scale_x/scale_y must be positive")
+  }
+  if t.roi_width <= 0 ||
+    t.roi_height <= 0 ||
+    t.source_width <= 0 ||
+    t.source_height <= 0 {
+    raise InvalidInput(t.source_width, t.source_height)
+  }
+  let roi_x = t.roi_x.to_double()
+  let roi_y = t.roi_y.to_double()
+  let roi_w = t.roi_width.to_double()
+  let landmarks = self.landmarks.map(fn(l) {
+    let sx = (l.x - t.offset_x.to_double()) / t.scale_x
+    let sy = (l.y - t.offset_y.to_double()) / t.scale_y
+    let x = if t.mirrored { roi_x + (roi_w - 1.0 - sx) } else { roi_x + sx }
+    Landmark::{
+      x,
+      y: roi_y + sy,
+      z: l.z,
+      visibility: l.visibility,
+      name: l.name,
+    }
+  })
+  PoseResult::{
+    landmarks,
+    score: self.score,
+    frame_id: self.frame_id,
+    timestamp_ns: self.timestamp_ns,
+    backend: self.backend,
+  }
+}
+
+///|
+/// 编排一帧的 ROI 检测：裁出 ROI → 复用 `detect`（含 letterbox/stretch 分派、预算、
+/// NMS、ROI 内坐标还原）→ 把关键点平移到完整源图坐标。
+///
+/// - 与 `detect` 的关系：ROI 为整图且配置一致时，`detect_roi` 与 `detect` 逐字段相等
+///   （T-W4-2：`detect_roi ≡ detect`，仅多一个 ROI 平移恒等步骤）；
+/// - 支持两种模式（按 `keep_aspect_ratio` 分派），镜像在 ROI 内以 ROI 宽还原后再平移；
+/// - 错误：ROI 非法/越界 `InvalidInput(x, y)`；其余同 `detect`。
+pub fn detect_roi(
+  backend : &PoseBackend,
+  image : RgbImage,
+  config : PoseConfig,
+  roi : RoiRect,
+  frame_id : FrameId,
+) -> PoseResult raise PoseError {
+  validate_roi(image, roi)
+  let cropped = crop_roi(image, roi)
+  let r = detect(backend, cropped, config, frame_id)
+  let dx = roi.x.to_double()
+  let dy = roi.y.to_double()
+  let landmarks = r.landmarks.map(fn(l) {
+    Landmark::{
+      x: l.x + dx,
+      y: l.y + dy,
+      z: l.z,
+      visibility: l.visibility,
+      name: l.name,
+    }
+  })
+  PoseResult::{
+    landmarks,
+    score: r.score,
+    frame_id: r.frame_id,
+    timestamp_ns: r.timestamp_ns,
+    backend: r.backend,
+  }
+}
+
+///|
 /// 前处理结果携带的逆变换参数（按 `keep_aspect_ratio` 分派两种模式）。
 priv enum ResizeTransform {
   Aspect(Transform)

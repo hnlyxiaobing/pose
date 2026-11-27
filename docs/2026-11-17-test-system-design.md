@@ -31,11 +31,11 @@
 ## 2. 测试分层
 
 ```text
-L0 单元与程序化 fixture（每个 pub fn 行为样例；现有 42 黑盒 + 22 白盒，W3 后 25 白盒）
+L0 单元与程序化 fixture（每个 pub fn 行为样例；W4 后 59 黑盒 + 28 白盒 = 87）
 L1 性质与变异（变形律 / Float16 位模式扫描 / 截断扫描 / 固定种子变异 ≥1000 体；W2 已落地）
 L2 受控黄金差分（tests/golden/ 自产字节 + 逐字段黄金记录；W2 已落地 ✓）
 L3 外部 oracle 差分（外部推理运行时，仓库外本地路径 + 哈希 + 显式 SKIPPED；W5 已落地 A）
-L4 CLI 场景 E2E（本库无 CLI：退化为库级编排场景 detect/detect_multi 的预期/拒绝矩阵）
+L4 CLI 场景 E2E（本库无 CLI：退化为库级编排场景 detect/detect_multi/detect_roi 的预期/拒绝矩阵）
 L5 元契约门禁（快照 / 错误簿记 8/8 / 双目标等价 / 变异自检 / 引用实存性 / 钩子一致性；W2 已落地 `tools/verify.sh`）
 R  真实样本本地 runner（仓库外路径 + SHA-256 门禁 + 显式 SKIPPED，永不进通过计数）
 ```
@@ -69,7 +69,7 @@ builder 能力清单：`spec_of(w,h,ch,dtype,mean,std,landmark_count)` 覆盖尺
 
 - 变形律 P1 幂等律：同一输入两次 `detect`/`letterbox`/`nms` 输出逐字节相等。
 - 变形律 P2 前处理↔还原恒等式：`mirror_x=false` 时 `PoseResult::restore(letterbox(bytes,t))` 对自身模型坐标满足 `x = (x_model - pad_x)/scale`、`y = (y_model - pad_y)/scale`；stretch 同理除以 `scale_x/scale_y`。
-- 变形律 P3 全图 ROI 等价律（W4）：`RoiRect` 恰为全图时 `detect_roi ≡ detect`（除新返回类型字段）（T-W4-2）。
+- 变形律 P3 全图 ROI 等价律（W4 已落地）：`RoiRect` 恰为全图时 `detect_roi ≡ detect`（等比 + stretch 两种模式均断言，T-W4-2）；另有 `detect_roi` ≡ `letterbox_roi` + `restore_roi` 的代数一致性断言（T-W4-5 补）。
 - 变形律 P4 后端注入律：`MockBackend` 与 `AltBackend` 输出同一 raw 时，除 `backend` 标注外 `PoseResult` 逐字段相等（已有 L0 用例，W2 入 golden）。
 - 变形律 P5 **防火墙律**：任一 W# 合入后，旧 `detect`/`detect_multi`/`letterbox`/`letterbox_stretch`/`decode_output`/`decode_pose_batch`/`nms`/`restore`/`restore_stretch` 在既有 62 语料上输出逐字节不变、旧用例零改动全绿。
 - Float16 位模式扫描：按指数段（正规/次正规/下溢/溢出/NaN/Inf）分段穷举代表值 + RNE 中点（1±k·2^-11、2^-25、3×2^-25、65520），与 `f32_to_f16_bits` 既有 22 条白盒断言对齐；当前 NaN 折叠为 `0x7E00`、下溢取偶的语义冻结，不得在扫描中「顺手修正」。
@@ -93,7 +93,7 @@ builder 能力清单：`spec_of(w,h,ch,dtype,mean,std,landmark_count)` 覆盖尺
 
 ### 6.1 能力×场景×安全 覆盖矩阵
 
-现状列来自 2026-11-17 P4 实测（B# 见开发文档 §0）；✓=已有用例，◐=点状/间接覆盖，✗=待建。
+现状列初测自 2026-11-17 P4 实测，已于 2026-11-27 W1–W6 落地后刷新（B# 见开发文档 §0）；✓=已有用例，◐=点状/间接覆盖，✗=待建。
 
 | ID | 能力/场景 | L0 | L1 | L2 | L3 | L4 | 现状(P4) | 缺口→W# |
 |---|---|---|---|---|---|---|---|---|
@@ -106,11 +106,11 @@ builder 能力清单：`spec_of(w,h,ch,dtype,mean,std,landmark_count)` 覆盖尺
 | F7 | 错误模型 8 变体 | ✓ | ✗ | ✓ | ✗ | ✓ | 显式簿记 8/8（B3） | 门禁化→W2（已落地 ✓，`tools/verify.sh`） |
 | F8 | 配置域/预算校验 | ✓ | ◐ | ✗ | ✗ | ✓ | 256 MiB / landmark 上限 / 预算 + max_poses 上界（B14） | 极端乘法→W3（已落地 ✓） |
 | F9 | 零引擎依赖/自包含 | ✓ | ✗ | ✗ | ✗ | ✗ | 零 import + 注释/CI 自包含（B15/B17 已修复） | 注释/CI 清理→W1（已落地 ✓） |
-| F10 | ROI crop / 数值对齐 | ✗ | ✗ | ✗ | ◐ | ✗ | ROI 未实现；oracle runner 已建（B16） | ROI→W4（待落地）；oracle→W5（已落地 A） |
+| F10 | ROI crop / 数值对齐 | ✓ | ◐ | ✗ | ◐ | ✗ | ROI 已交付（B16 部分补齐）；oracle runner 已建 | ROI→W4（已落地 ✓）；oracle→W5（已落地 A） |
 | S1 | 预期场景端到端（单帧体感、换后端、17→33 配置迁移） | ✓ | | ✓ | | ✓ | 现有 78 条覆盖三场景 | 脚本化 golden→W2（已落地 ✓） |
 | S2 | 安全拒绝场景（配置非法不触达后端、超预算、非有限输出写盘前拒绝） | ✓ | ◐ | | | ✓ | `seen_input_len=-1` 断言（B14/B9） | 非有限候选→W3（已落地 ✓） |
 | C1 | 输入安全（畸形不 panic、内存有界、Int32 不回绕） | ✓ | ✓ | | | | 上界校验 + 系统截断/变异扫描（B14/B22/B23） | 截断+变异→W2（已落地 ✓）；极端乘法→W3（已落地 ✓） |
-| C2 | 防火墙（新函数不改旧语义） | ✓ | ✓ | ✓ | | ◐ | 固化 golden + 双目标等价（B24 已修复） | P5/T-W2-5/T-W3-4→W2/W3（已落地 ✓）；T-W4-3→W4（待落地） |
+| C2 | 防火墙（新函数不改旧语义） | ✓ | ✓ | ✓ | | ◐ | 固化 golden + 双目标等价（B24 已修复） | P5/T-W2-5/T-W3-4→W2/W3（已落地 ✓）；T-W4-3→W4（已落地 ✓） |
 | C3 | 许可红线（F-D 零入库） | ✓ | | | | | 零模型/二进制（B7/B25） | R runner 哈希门禁→W5（已落地 A） |
 | C4 | 契约稳定（快照/README 索引/引用实存性） | ✓ | | | | | 双快照无漂移；README 索引一致、引用全实存（B2/B5/B18 已修复） | 清理→W1（已落地 ✓）；门禁→W2（已落地 ✓） |
 
@@ -118,18 +118,18 @@ C 行已含防火墙（C2）与许可红线（C3）两行。
 
 ### 6.2 错误变体触发簿记（8/8 强制）
 
-| 变体 | 触发 fixture（现状，2026-11-17） | 新增触发（待建） |
+| 变体 | 触发 fixture（初测 2026-11-17） | W3/W4 新增触发（均已落地） |
 |---|---|---|
 | `BackendNotOpen` | ✓ 未 open 调 `infer` / `close` / `detect`；Mock 与适配器双通道 | 无 |
 | `BackendFailure` | ✓ 注入 invoke 失败、主/回退皆缺、重复 open、显式 `(kind, detail)` 断言 | 无 |
 | `InvalidConfig` | ✓ 零 std / 越界阈值 / pad 越界 / 非法 Transform / 超大 spec / 非法 nms 阈值 | ✓ 非有限候选、极端 `max_poses`（W3 已落地） |
-| `InvalidInput` | ✓ 图像尺寸与数据长度不符、非法 Transform 源尺寸、显式 `(w,h)` 断言 | ✓ 极端尺寸 Int64 判定（W3）；ROI 越界（W4 待建） |
-| `OutputDecode` | ✓ NaN y / NaN score 输出张量，白盒 + 黑盒双通道 | 位翻转语料（W2） |
-| `ShapeMismatch` | ✓ 单块/批处理字节数不符、适配器输入/输出长度不符，显式 `(expected,actual)` 断言 | 截断扫描（W2） |
-| `UnsupportedModel` | ✓ 非 3 通道模型输入（letterbox 与 stretch 两路径） | 无 |
+| `InvalidInput` | ✓ 图像尺寸与数据长度不符、非法 Transform 源尺寸、显式 `(w,h)` 断言 | ✓ 极端尺寸 Int64 判定（W3）；ROI 越界/零尺寸/负原点（W4 已落地） |
+| `OutputDecode` | ✓ NaN y / NaN score 输出张量，白盒 + 黑盒双通道 | 位翻转语料（W2 已落地：变异扫描） |
+| `ShapeMismatch` | ✓ 单块/批处理字节数不符、适配器输入/输出长度不符，显式 `(expected,actual)` 断言 | 截断扫描（W2 已落地） |
+| `UnsupportedModel` | ✓ 非 3 通道模型输入（letterbox 与 stretch 两路径 + `letterbox_roi`） | 无 |
 | `BudgetExceeded` | ✓ 34 块 > `max_poses=1`、3 块 > `max_poses=2` | ✓ 极端预算回绕回归（W3 已落地） |
 
-显式簿记 **8/8**（2026-11-17 实测，每变体均有直接变体名断言，无死变体）；W3/W4 只增加触发语料，不新增变体。
+显式簿记 **8/8**（2026-11-27 复核，每变体均有直接变体名断言，无死变体；`tools/verify.sh` 将此门禁化）；W3/W4 只增加触发语料，不新增变体（仍 8 个）。
 
 ### 6.3 恒等式断言（语义契约，全路径成立）
 
@@ -145,9 +145,9 @@ C 行已含防火墙（C2）与许可红线（C3）两行。
 
 | 用例 | 位置 | 原因 |
 |---|---|---|
-| （无） | — | 当前基线零 `#skip`（2026-11-27 实测：`moon test` **78/78**，含 W6-A 异步 2 条、W3 fail-closed 3 条、W2 golden 8 条 + 截断/变异扫描 3 条；脚本层 SKIPPED 见下） |
+| （无） | — | 当前基线零 `#skip`（2026-11-27 实测：`moon test` **87/87**，含 W6-A 异步 2 条、W3 fail-closed 3 条、W2 golden 8 条 + 截断/变异扫描 3 条、W4 ROI 9 条；脚本层 SKIPPED 见下） |
 
-计数口径：78 条声明（黑盒 50 + 白盒 28）− 0 条 `#skip` = 78 执行（2026-11-27，wasm；native 同为 78/78）；W5-A 的 `tools/numeric-oracle.sh` 在缺模型/缺比较命令时以退出码 78 SKIPPED，属脚本层独立口径，永不进入 `moon test` 通过计数。
+计数口径：87 条声明（黑盒 59 + 白盒 28）− 0 条 `#skip` = 87 执行（2026-11-27，wasm；native 同为 87/87）；W5-A 的 `tools/numeric-oracle.sh` 在缺模型/缺比较命令时以退出码 78 SKIPPED，属脚本层独立口径，永不进入 `moon test` 通过计数。
 
 ### 6.5 验收 ID 双向追溯表
 
@@ -169,11 +169,11 @@ C 行已含防火墙（C2）与许可红线（C3）两行。
 | T-W3-3 极端 `max_poses` → `InvalidConfig` 且预算不回绕 | W3（已落地 ✓） | F8 | A4/L0 |
 | T-W3-4 防火墙：旧 62 用例零改动全绿 | W3（已落地 ✓，64/64） | C2 | A5/L5 |
 | T-W3-5 截断/变异扫描无 panic | W3（扫描驱动 W2 已落地 ✓，覆盖 decode 路径） | C1 | A4/L1 |
-| T-W4-1 ROI 边界（贴边/越界/零尺寸）断言 | W4 | F10 | A4/L0 |
-| T-W4-2 ROI=全图时数值等价 | W4 | F10、C2 | A1/L1 |
-| T-W4-3 旧 `detect` 在既有语料上逐字节不变 | W4 | C2 | A5/L5 |
-| T-W4-4 快照 diff 纯加法、错误变体仍 8 个 | W4 | C4、F7 | A5/L5 |
-| T-W4-5 镜像 + ROI 组合坐标还原 | W4 | F10、F5 | A1/L0 |
+| T-W4-1 ROI 边界（贴边/越界/零尺寸）断言 | W4（已落地 ✓） | F10 | A4/L0 |
+| T-W4-2 ROI=全图时数值等价 | W4（已落地 ✓，等比 + stretch） | F10、C2 | A1/L1 |
+| T-W4-3 旧 `detect` 在既有语料上逐字节不变 | W4（已落地 ✓，78 用例零改动） | C2 | A5/L5 |
+| T-W4-4 快照 diff 纯加法、错误变体仍 8 个 | W4（已落地 ✓，5 项新增 pub） | C4、F7 | A5/L5 |
+| T-W4-5 镜像 + ROI 组合坐标还原 | W4（已落地 ✓） | F10、F5 | A1/L0 |
 | T-W5-1 有模型→差分报告与哈希登记 | W5（A 已落地；报告须外部模型驱动） | F10、L3/R | A1/L3 |
 | T-W5-2 无模型→显式 SKIPPED | W5（A 已落地 ✓，实测退出 78） | C3 | A2/L3 |
 | T-W5-3 哈希不符拒绝执行 | W5（A 已落地 ✓，实测退出 1） | C3 | A4/R |
@@ -236,4 +236,4 @@ Windows 下 moon 把进度写 stderr，以退出码与 `Total tests: N, passed: 
 4. 每包合入 ⇒ 开发文档 DoD 勾选 + 矩阵现状刷新 + CHANGELOG 测试增量。
 5. 「通过」须可复验：命令 + 日期 + 计数；SKIPPED 永远单列。
 
-落地验收：L0 ✓（78 条实跑，W2 golden + W3 fail-closed 已补齐）、L1 ✓（截断扫描 + 固定种子 1000 变异体，W2 已落地）、L2 ✓（8 条 golden + `tests/golden/README.md` 登记，W2 已落地）、L3 ◐（W5-A runner 已落地，缺外部模型时显式 SKIPPED；真实差分未跑）、L4 ✓（库级 E2E，无 CLI）、L5 ✓（快照/错误簿记 8/8/双目标等价/变异自检/引用实存性由 `tools/verify.sh` 门禁化，W2 已落地）、R ✗（零入库样本；W5-A 本地可选）；W5/W6 已裁决 A 并落地，W1/W2/W3 已落地，仅 W4（ROI）待落地。
+落地验收：L0 ✓（87 条实跑）、L1 ✓（截断扫描 + 固定种子 1000 变异体）、L2 ✓（8 条 golden + `tests/golden/README.md` 登记）、L3 ◐（W5-A runner 已落地，缺外部模型时显式 SKIPPED；真实差分未跑）、L4 ✓（库级 E2E，无 CLI）、L5 ✓（快照/错误簿记 8/8/双目标等价/变异自检/引用实存性由 `tools/verify.sh` 门禁化）、R ✗（零入库样本；W5-A 本地可选）；W1–W6 全部落地（W5/W6 裁决 A）。

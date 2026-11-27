@@ -18,7 +18,11 @@ pub fn detect_multi(&PoseBackend, RgbImage, PoseConfig, UInt64) -> Array[PoseRes
 
 pub async fn detect_multi_async(&AsyncPoseBackend, RgbImage, PoseConfig, UInt64) -> Array[PoseResult]
 
+pub fn detect_roi(&PoseBackend, RgbImage, PoseConfig, RoiRect, UInt64) -> PoseResult raise PoseError
+
 pub fn letterbox(RgbImage, PoseConfig) -> (Bytes, Transform) raise PoseError
+
+pub fn letterbox_roi(RgbImage, PoseConfig, RoiRect) -> (Bytes, RoiTransform) raise PoseError
 
 pub fn letterbox_stretch(RgbImage, PoseConfig) -> (Bytes, StretchTransform) raise PoseError
 
@@ -100,6 +104,7 @@ pub(all) struct PoseResult {
   backend : BackendKind
 }
 pub fn PoseResult::restore(Self, Transform) -> Self raise PoseError
+pub fn PoseResult::restore_roi(Self, RoiTransform) -> Self raise PoseError
 pub fn PoseResult::restore_stretch(Self, StretchTransform) -> Self raise PoseError
 
 pub(all) struct RgbImage {
@@ -115,6 +120,27 @@ pub(all) enum RgbLayout {
   Bgr
   Rgba
   Bgra
+}
+
+pub(all) struct RoiRect {
+  x : Int32
+  y : Int32
+  width : Int32
+  height : Int32
+}
+
+pub(all) struct RoiTransform {
+  scale_x : Double
+  scale_y : Double
+  offset_x : Int32
+  offset_y : Int32
+  roi_x : Int32
+  roi_y : Int32
+  roi_width : Int32
+  roi_height : Int32
+  source_width : Int32
+  source_height : Int32
+  mirrored : Bool
 }
 
 pub(all) struct StretchTransform {

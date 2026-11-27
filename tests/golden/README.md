@@ -28,6 +28,19 @@ golden 都必须在 `pose_golden_test.mbt` / `pose_wbtest.mbt` 中被**真实断
 | G7 | P1 幂等律 | `golden: P1 幂等律` | `letterbox`/`nms`/`detect` 双次调用输出逐字节相等 |
 | G8 | P4 后端注入律 | `golden: P4 后端注入等价` | Mock 与 Alt 同 raw → landmarks/score/frame_id/timestamp_ns 全等；仅 `backend` 标注不同（`Mock` vs `Custom("alt-adapter")`） |
 
+## 2b. W4 ROI golden（`pose_roi_test.mbt`）
+
+| # | golden 行 | 断言位置 | 精确记录 |
+|---|---|---|---|
+| G9 | ROI 边界拒绝 | `ROI: 边界非法报 InvalidInput` | 零宽/零高/负原点/右上越界/右下越界 → `InvalidInput(x,y)` |
+| G10 | ROI 贴边合法 | `ROI: 贴边合法...` | 4×4 源图 ROI=(2,2,2,2) → 2×2 模型 scale=1，逐像素 `22/23/32/33` |
+| G11 | letterbox_roi 裁剪+缩放 | `ROI: letterbox_roi 裁剪 + 缩放字节...` | ROI=(1,1,2,2) → 裁剪 `11/12/21/22` → 4×4 scale=2 采样 `11,11,12,12 / 21,21,22,22`；`RoiTransform` 11 字段全断言 |
+| G12 | ROI=整图 ≡ detect | `ROI: ROI=整图 ≡ detect`（等比/stretch） | 两模式逐字段相等 |
+| G13 | 镜像 + 子 ROI | `ROI: 镜像 + 子 ROI 组合还原坐标` | 4×1 源、ROI=(1,0,2,1)、mirror：模型 x=0→源 x=2；`restore_roi` 一致 |
+| G14 | 两路径代数一致 | `ROI: detect_roi 与 manual letterbox_roi+restore_roi 坐标一致` | 同 ROI/镜像下两条还原路径坐标相等 |
+| G15 | 错误变体仍 8 个 | `ROI: 错误变体仍为既有 8 个` | 1 通道→`UnsupportedModel`；非等比 `letterbox_roi`→`InvalidConfig` |
+| G16 | 旧 detect 防火墙 | `ROI: 旧 detect 输出不变` | 8×8 语料 → (4,4)、score 0.9、ts 123456 |
+
 ## 3. 截断 / 变异扫描语料（L1）
 
 | 扫描 | 种子/规模 | 断言位置 | 允许错误集合 |
@@ -38,5 +51,5 @@ golden 都必须在 `pose_golden_test.mbt` / `pose_wbtest.mbt` 中被**真实断
 
 ## 4. 计数口径
 
-`moon test` = **78** 条（W2 前 67 → W2 后 78，新增 11：截断 1 + 变异 2 + golden 8），
-零 `#skip`；wasm / native 双目标各 78/78。计数以 `moon test` 实测为准，易漂移。
+`moon test` = **87** 条（W2 前 67 → W2 后 78 → W4 后 87；W2 新增 11：截断 1 + 变异 2 + golden 8；
+W4 新增 9 条 ROI 用例），零 `#skip`；wasm / native 双目标各 87/87。计数以 `moon test` 实测为准，易漂移。

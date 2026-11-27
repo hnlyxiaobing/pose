@@ -54,3 +54,25 @@
   - **脚本层（`tools/verify.sh`，仓库自包含）**：串起五门禁 + native parity + 截断/变异自检 + 错误簿记 8/8（8 变体全被测试断言且 mbti 变体数冻结=8）+ 引用实存性；外部 oracle 缺失显式 SKIPPED（退出码 78 单列），不计入通过（T-W2-6）。
   - 防火墙：原 67 用例零改动全绿（T-W2-5）。
 - **仓库外申报口径**：不回写；仅记录本仓库 git 实测。
+
+---
+
+## W4 · ROI 与新布局防火墙扩展（2026-11-27）
+
+- **工作包**：W4（P2/M，dev-plan §5 W4）。
+- **新增 pub 声明（纯加法，无删除/无改签名）**：
+  - `pub(all) struct RoiRect { x, y, width, height : Int32 }`
+  - `pub(all) struct RoiTransform { scale_x, scale_y : Double; offset_x, offset_y : Int32; roi_x, roi_y, roi_width, roi_height, source_width, source_height : Int32; mirrored : Bool }`
+  - `pub fn letterbox_roi(RgbImage, PoseConfig, RoiRect) -> (Bytes, RoiTransform) raise PoseError`
+  - `pub fn detect_roi(&PoseBackend, RgbImage, PoseConfig, RoiRect, FrameId) -> PoseResult raise PoseError`
+  - `pub fn PoseResult::restore_roi(Self, RoiTransform) -> Self raise PoseError`
+- **快照 diff**：纯加法（`pkg.generated.mbti` 中仅新增上述 5 项；`cmd/main` 快照无变化；错误变体仍 8 个）。
+- **测试增量**：+9（`moon test` 78/78 → 87/87，零 `#skip`；wasm/native 双目标各 87/87）。
+- **要点**：
+  - `RoiRect` 越界 / 非正尺寸 / 负原点 / 数据长度不符 → `InvalidInput(x, y)`（复用既有变体，不新增错误变体）。
+  - `letterbox_roi` 复用 `crop_roi` + `letterbox` 的整数缩放计划与采样编码（含 Float16/RNE、归一化、镜像）；非等比配置报 `InvalidConfig`（与 `letterbox` 一致）。
+  - `detect_roi` 复用 `detect`（含 letterbox/stretch 分派、预算、NMS、ROI 内坐标还原）后把关键点平移到整图坐标；ROI=整图时与 `detect` 逐字段相等（T-W4-2，两种模式均断言）。
+  - `PoseResult::restore_roi` 为 `letterbox_roi` 的对偶还原：`x = roi_x + (mirrored ? roi_width-1-sx : sx)`，`sx = (x-offset_x)/scale_x`；与 `detect_roi` 路径代数一致。
+  - 防火墙：旧 `detect`/`detect_multi`/`letterbox`/`letterbox_stretch`/`restore`/`restore_stretch` 零改动，原 78 用例零改动全绿（T-W4-3）。
+- **已登记限制**：`letterbox_roi` 仅承载等比模式（非等比 ROI 请用 `detect_roi`，它按 `keep_aspect_ratio` 分派两种模式）。
+- **仓库外申报口径**：不回写；仅记录本仓库 git 实测。
