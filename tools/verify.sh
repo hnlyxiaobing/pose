@@ -2,15 +2,17 @@
 # pose 交付校验 runner（W2，2026-11-27）
 #
 # 仓库自包含：不引用工作区路径、不引用兄弟模块、不依赖第三方运行时。
-# 串联：五门禁 + native parity + 截断/变异自检 + 错误簿记 8/8 + 引用实存性。
-# 外部 oracle（真实推理运行时）缺失时显式 SKIPPED 并以退出码 78 单列，**不计入通过**。
+# 串联：五门禁 + native parity + 截断/变异自检 + 错误簿记 8/8 + 引用实存性
+#       + oracle runner 机制自检（`--selfcheck`，强制）。
+# 真实模型差分（外部推理运行时）缺失时显式 SKIPPED 并以退出码 78 单列，**不计入通过**。
 #
 # 用法：
-#   bash tools/verify.sh                 # 五门禁 + 元契约；oracle 显式 SKIPPED
+#   bash tools/verify.sh                 # 五门禁 + 元契约；真实差分显式 SKIPPED
 #   bash tools/verify.sh --no-native     # 跳过 native parity（无 native 工具链时）
-#   POSE_ORACLE_MODEL=<仓库外模型路径> bash tools/verify.sh   # 附带 oracle 哈希门禁
+#   POSE_ORACLE_MODEL=<仓库外模型路径> bash tools/verify.sh   # 附带真实 oracle 差分
 #
-# 退出码：0 全绿；1 任一硬门禁失败；78 仅当「除 oracle 外全绿且 oracle 缺失」时返回。
+# 退出码：0 全绿（含真实差分）；1 任一硬门禁失败；
+#         78 = 除「真实模型差分」外全绿且该步已显式 SKIPPED（不计入通过）。
 
 set -uo pipefail
 
@@ -19,7 +21,7 @@ for arg in "$@"; do
   case "$arg" in
     --no-native) SKIP_NATIVE=1 ;;
     --help|-h)
-      sed -n '2,17p' "$0"
+      sed -n '2,15p' "$0"
       exit 0 ;;
     *)
       echo "FAIL: unknown argument '$arg'" >&2
@@ -126,8 +128,9 @@ if [ "$book_bad" -ne 0 ]; then bad "错误簿记不完整"; fi
 step "引用实存性 · 代码/CI/README 引用路径"
 REF_FILES=""
 for f in pose.mbt pose_async.mbt pose_test.mbt pose_wbtest.mbt pose_golden_test.mbt \
-         pose_async_test.mbt README.md .githooks/pre-commit \
-         .github/workflows/ci.yml tools/verify.sh tools/numeric-oracle.sh; do
+         pose_roi_test.mbt pose_async_test.mbt README.md .githooks/pre-commit \
+         .github/workflows/ci.yml tools/verify.sh tools/numeric-oracle.sh \
+         tests/golden/README.md; do
   [ -f "$f" ] && REF_FILES="$REF_FILES $f"
 done
 REFS="$(grep -ohE '(docs|tools|tests)/[A-Za-z0-9._/-]+' $REF_FILES 2>/dev/null | sort -u)"
@@ -147,9 +150,18 @@ done <<< "$REFS"
 if [ "$ref_bad" -eq 0 ]; then ok "所有引用路径均实存"; fi
 
 # ---------------------------------------------------------------------------
-# 6. 外部 oracle（W5）：缺失即显式 SKIPPED，不计入通过
+# 6. 外部 oracle（W5）
+#    6a 机制自检（强制）：确定性自产探针走完整哈希门禁 → 比较 → 报告链路
+#    6b 真实模型差分（可缺省）：缺失即显式 SKIPPED，不计入通过
 # ---------------------------------------------------------------------------
-step "W5 · 外部 oracle runner（可缺省）"
+step "W5-6a · oracle runner 机制自检（--selfcheck，强制）"
+if bash tools/numeric-oracle.sh --selfcheck; then
+  ok "runner 机制自检（哈希登记 → 门禁 → 比较 → 报告；非真实模型差分）"
+else
+  bad "oracle --selfcheck（runner 契约不可用）"
+fi
+
+step "W5-6b · 真实模型差分（可缺省）"
 ORACLE_RC=0
 if [ -n "${POSE_ORACLE_MODEL:-}" ]; then
   if bash tools/numeric-oracle.sh --model "$POSE_ORACLE_MODEL" --registry tools/numeric-oracle.sha256; then
@@ -163,7 +175,7 @@ if [ -n "${POSE_ORACLE_MODEL:-}" ]; then
     fi
   fi
 else
-  skip "无外部模型（POSE_ORACLE_MODEL 未设）；oracle 未运行，不计入通过"
+  skip "无外部模型（POSE_ORACLE_MODEL 未设）；真实差分未运行，不计入通过"
   ORACLE_RC=78
 fi
 

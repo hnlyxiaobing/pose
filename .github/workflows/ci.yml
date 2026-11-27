@@ -3,6 +3,12 @@
 #
 # 本模块是独立 git 仓库，workflow 必须放在本模块 .github/workflows/ 下才会被 GitHub Actions 触发。
 #
+# 两个 job（互不替代）：
+#   · five-gates   —— 五道门禁（合入硬门禁），顺序执行，任一步非 0 即该 job 失败。
+#   · meta-contract—— 脚本层元契约（W2/W5）：`tools/verify.sh --no-native`，复验
+#                     错误簿记 8/8 + 截断/变异自检 + 引用实存性 + oracle 机制自检。
+#                     退出码 78（真实模型差分显式 SKIPPED）按成功处理。
+#
 # 五道门禁（顺序执行，任一步非 0 即整 job 失败）：
 #   1. moon check --deny-warn
 #   2. moon build
@@ -117,3 +123,48 @@ jobs:
         shell: bash
         continue-on-error: true
         run: moon clean
+
+  # ==========================================================================
+  # 元契约 job（W2/W5 脚本层门禁）：仓库自包含地复验「五门禁 + 错误簿记 8/8
+  # + 截断/变异自检 + 引用实存性 + oracle runner 机制自检」。
+  #
+  # 说明：
+  #   - 与 five-gates job 互补：five-gates 只跑五门禁；本 job 额外跑元契约，
+  #     二者互不替代（五门禁仍是合入硬门禁）。
+  #   - native 双目标等价依赖 runner 主机 C 工具链，尚未在 GitHub Actions 实跑
+  #     验证（本机等价实跑已通过），故此处用 --no-native 跳过；需要时显式去掉。
+  #   - verify.sh 退出码 78 = 除「真实模型差分」外全绿。真实差分因许可红线只允许
+  #     仓库外本地路径 + 显式 SKIPPED，永不进通过计数，故 78 按成功处理。
+  # ==========================================================================
+  meta-contract:
+    name: meta-contract (pose)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pose
+        uses: actions/checkout@v5
+
+      - name: Install MoonBit toolchain (latest)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.moon/tmp"
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh -o "$HOME/.moon/tmp/install.sh"
+          bash "$HOME/.moon/tmp/install.sh"
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: "Meta-contract · bash tools/verify.sh --no-native"
+        shell: bash
+        run: |
+          set -uo pipefail
+          bash tools/verify.sh --no-native
+          rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "meta-contract OK (all green, incl. real oracle diff)"
+            exit 0
+          fi
+          if [ "$rc" -eq 78 ]; then
+            echo "meta-contract OK (rc=78: 真实模型差分显式 SKIPPED，不计入通过)"
+            exit 0
+          fi
+          echo "::error::meta-contract failed (rc=$rc); see tools/verify.sh output above"
+          exit "$rc"

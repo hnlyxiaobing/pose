@@ -9,7 +9,7 @@
 >
 > **裁决落地记录（2026-11-17，用户采纳推荐 A）**：W5-A 已新增 `tools/numeric-oracle.sh` + 空哈希登记（默认无条目，缺库/缺比较命令显式 SKIPPED/78，哈希未登记硬失败，真实结论不进通过计数）；W6-A 已新增 `AsyncPoseBackend` trait 与 `detect_async`/`detect_multi_async`（纯加法 +7 行快照、零新错误变体，旧同步入口逐字节不变），并新增 2 条异步防火墙测试（`moon test` **64/64**）。快照 diff 为纯加法，须与源码同提交。
 >
-> **合入记录（2026-11-27）**：W1（M0）漂移清理与自包含已落地（修复 B2/B17–B21，README 索引与快照逐条一致、pre-commit 补五门禁、新建 CHANGELOG，测试增量 0）；W3（M1）fail-closed 输入加固已落地（关闭 B22/B23，三项 fail-closed 修复按例外登记 CHANGELOG，测试增量 +3）；W2（M2）契约 golden 与双目标等价已落地（新建 `pose_golden_test.mbt` 8 条 golden、`tests/golden/README.md` 登记、`pose_wbtest.mbt` 截断/变异扫描、`tools/verify.sh` 元契约 runner；关闭 B4/B24 的 golden 与双目标缺口，测试增量 +11）；W4（M2）ROI 与新布局防火墙已落地（`RoiRect`/`RoiTransform`/`letterbox_roi`/`detect_roi`/`restore_roi` 纯加法，关闭 B16 ROI 缺口，测试增量 +9）。当前 `moon test` **87/87**（wasm/native 双目标均 87/87）、零 `#skip`，五门禁全绿；W4 快照 diff 为纯加法（5 项新增 pub，无删除/改签名，错误变体仍 8 个）。**全部工作包 W1–W6 已交付。**
+> **合入记录（2026-11-27）**：W1（M0）漂移清理与自包含已落地（修复 B2/B17–B21，README 索引与快照逐条一致、pre-commit 补五门禁、新建 CHANGELOG，测试增量 0）；W3（M1）fail-closed 输入加固已落地（关闭 B22/B23，三项 fail-closed 修复按例外登记 CHANGELOG，测试增量 +3）；W2（M2）契约 golden 与双目标等价已落地（新建 `pose_golden_test.mbt` 8 条 golden、`tests/golden/README.md` 登记、`pose_wbtest.mbt` 截断/变异扫描、`tools/verify.sh` 元契约 runner；关闭 B4/B24 的 golden 与双目标缺口，测试增量 +11）；W4（M2）ROI 与新布局防火墙已落地（`RoiRect`/`RoiTransform`/`letterbox_roi`/`detect_roi`/`restore_roi` 纯加法，关闭 B16 ROI 缺口，测试增量 +9）。当前 `moon test` **88/88**（wasm/native 双目标均 88/88）、零 `#skip`，五门禁全绿；W4 快照 diff 为纯加法（5 项新增 pub，无删除/改签名，错误变体仍 8 个）。**收口（2026-11-27）**：`tools/numeric-oracle.sh --selfcheck` 用确定性自产探针端到端验证 runner 契约（哈希登记 → 门禁 → 比较 → 报告），`tools/verify.sh` 将其设为强制步骤，新增扫描器负对照测试（防断言空转），CI 增加 `meta-contract` job。**全部工作包 W1–W6 已交付。**
 
 ## 0. 现状基线（实测核对，开发前必读）
 
@@ -55,7 +55,7 @@
 | B21 | 门覆盖缺口：`.githooks/pre-commit` 仅执行 `moon check`，未覆盖其余四门禁；CI 五门禁完整，本地钩子与 CI 不一致 | `.githooks/pre-commit` L1–2 ↔ `.github/workflows/ci.yml` L96–122 |
 | B22 | 已修复（W3，2026-11-27）：`nms` 入口逐候选校验 `score` 与 `bbox` 四坐标 `is_finite()`，非有限即 `InvalidConfig("nms: non-finite candidate score or bbox")`（复用既有变体、消息为新增文本）；排序与 IoU 主体不变 | `pose.mbt` L961–999（现入口新增有限性校验） |
 | B23 | 已修复（W3，2026-11-27）：`letterbox`/`letterbox_stretch` 数据长度改用 `to_int64()` 中间量校验，`letterbox_plan` 与 `resize_encode` 缩放/采样算术改 Int64 中间量；`detect_multi` 预算改 `block.to_int64()*max_poses.to_int64()`，`validate_spec_and_config` 与 `nms` 增加 `max_poses_upper_bound=65536` 拒绝极端值 | `pose.mbt` L411–417、L490–507、L691–732、L768/823、L1147–1156 |
-| B24 | 已补齐（W2，2026-11-27）：wasm 78/78、native 78/78（含 8 条 L2 golden + 截断/变异扫描）；同一 builder/断言双目标各跑一次 ⇒ 值输出逐字节 diff = 0，浮点边界（Float16/归一化）由 golden 断言跨目标一致；`tools/verify.sh` 把 native parity 纳入元契约 | 2026-11-27 `moon test` + `moon test --target native`；`pose_golden_test.mbt`；`tools/verify.sh` |
+| B24 | 已补齐（W2，2026-11-27）：W2 落地时 wasm/native 各 78/78（含 8 条 L2 golden + 截断/变异扫描），后续 W4 +9、收口 +1，现为各 88/88；同一 builder/断言双目标各跑一次 ⇒ 值输出逐字节 diff = 0，浮点边界（Float16/归一化）由 golden 断言跨目标一致；`tools/verify.sh` 把 native parity 纳入元契约 | 2026-11-27 `moon test` + `moon test --target native`；`pose_golden_test.mbt`；`tools/verify.sh` |
 | B25 | 许可与对标线索：仓库外申报口径称 17/33 点布局语义参考公开模型卡（Apache-2.0）且未移植代码；本仓库零第三方代码、零二进制资产，口径仅作线索，不据此声称任何外部文件可访问 | 仓库外申报口径（仅作线索）；`moon.mod`；目录实测 |
 
 F# → B# 覆盖：F1→B8；F2→B9；F3→B10；F4→B11；F5→B12；F6→B13；F7→B3；F8→B14；F9→B15；F10→B16。
@@ -154,7 +154,7 @@ F# → B# 覆盖：F1→B8；F2→B9；F3→B10；F4→B11；F5→B12；F6→B13
 - 截断扫描：每个 golden 输出张量的全前缀 + 每 12 字节结构边界；只允许 `OutputDecode`/`ShapeMismatch`/`InvalidConfig`/`BudgetExceeded`，无 panic/挂起；固定种子变异 ≥1000 体（替换/插入/删除）。
 - 双目标：同一 builder 在 wasm/native 各跑一次，值输出逐字节 diff=0；浮点差异先定位再定 golden 容差，容差策略写进测试文档 §5（不得默默放宽）。
 - 脚本层 `tools/verify.sh`（仓库自包含）：串起五门禁 + native parity + 变异 + 错误簿记 8/8 + 引用实存性；oracle 缺失显式 SKIPPED。
-**验收（已达成 ✓，2026-11-27）**：T-W2-1 golden 集入库且由测试真实读取（非死资产，`pose_golden_test.mbt` + `tests/golden/README.md`）；T-W2-2 dtype/Float16 边界性质全绿（5 dtype golden + 既有 22 条 Float16 白盒断言）；T-W2-3 截断+≥1000 变异无 panic（`scan_truncations` / `scan_mutations(1000)`）；T-W2-4 wasm/native 值输出 diff=0（双目标各 78/78）；T-W2-5 旧 62 用例零改动全绿（防火墙，W3 后 67 用例延续）；T-W2-6 错误簿记 8/8 门禁化（`tools/verify.sh`）。
+**验收（已达成 ✓，2026-11-27）**：T-W2-1 golden 集入库且由测试真实读取（非死资产，`pose_golden_test.mbt` + `tests/golden/README.md`）；T-W2-2 dtype/Float16 边界性质全绿（5 dtype golden + 既有 22 条 Float16 白盒断言）；T-W2-3 截断+≥1000 变异无 panic（`scan_truncations` / `scan_mutations(1000)`）；T-W2-4 wasm/native 值输出 diff=0（W2 时点双目标各 78/78，含后续增量为各 88/88）；T-W2-5 旧 62 用例零改动全绿（防火墙，W3 后 67 用例延续）；T-W2-6 错误簿记 8/8 门禁化（`tools/verify.sh`）。
 
 ### W3 fail-closed 输入加固（P1/S）
 
@@ -202,7 +202,7 @@ pub fn PoseResult::restore_roi(Self, RoiTransform) -> Self raise PoseError
 **实现要点（已落地）**：`RoiRect` 越界/非正尺寸/负原点 → `InvalidInput(x,y)`（复用既有变体，不新增）；`letterbox_roi` = `crop_roi` + 复用 `letterbox` 的整数缩放计划与 `resize_encode`（含 W3 的 Int64 长度检查），ROI 原点与填充进入 `RoiTransform`，由新入口 `PoseResult::restore_roi` 还原（不改旧 `restore`）；`detect_roi` = `crop_roi` + 复用 `detect`（含 letterbox/stretch 分派、预算/NMS、ROI 内坐标还原）+ 平移 ROI 原点；`RoiRect`/`RoiTransform` 为全新 struct，不给 `Transform`/`PoseConfig` 加字段；快照 diff 为纯加法并已登记 CHANGELOG。**已登记限制**：`letterbox_roi` 仅承载等比模式（非等比 ROI 请用 `detect_roi`）。
 **验收（已达成 ✓，2026-11-27）**：T-W4-1 ROI 边界（贴边/越界/零尺寸/负原点）断言；T-W4-2 ROI 与全图在 ROI=全图时数值等价（等比 + stretch 两种模式均断言）；T-W4-3 旧 `detect` 在既有语料上逐字节不变（原 78 用例零改动全绿）；T-W4-4 快照 diff 纯加法 + 错误变体仍 8 个；T-W4-5 镜像 + ROI 组合坐标还原断言（并验证 `detect_roi` 与 `letterbox_roi`+`restore_roi` 代数一致）。
 
-### W5 外部运行时数值 oracle runner（裁决 A 已落地，P2/L）
+### W5 外部运行时数值 oracle runner（裁决 A 已落地 + 2026-11-27 收口，P2/L）
 
 **目标**：在许可与模块边界内回答「前处理字节与解码值是否与外部推理运行时一致（<1e-4）」（B16/B24、G5）。
 **非目标**：不把模型、第三方运行时或许可不明二进制入库；不把真实差分写入 CI 通过计数；不改任何 API。
@@ -211,7 +211,8 @@ pub fn PoseResult::restore_roi(Self, RoiTransform) -> Self raise PoseError
 - **B（零成本降级）**：不建 runner；README §6 与测试文档 L3/R 维持「未实现/需本地配置」声明，仅把本轮实测的 62/62 与双目标结论作为内部一致性证据。
 - **C（不推荐）**：把模型与运行时依赖引入仓库或 CI 镜像——触碰许可红线与零依赖约束，除非用户另行裁决四件例外，否则不执行。
 **实现要点（A）**：脚本不引用工作区路径或兄弟模块；样本路径由参数注入；报告登记哈希/日期/工具链版本/容差与失败样本；入库占位用例以 `#skip` 单列且永不冒充通过。
-**验收**：T-W5-1 有模型→差分报告与哈希登记；T-W5-2 无模型→显式 SKIPPED；T-W5-3 哈希不符拒绝执行；T-W5-4 SKIPPED 不进通过计数。
+**收口（2026-11-27）**：新增 `--selfcheck`，用**确定性自产探针**（临时目录内固定 ASCII 字节；非第三方模型、入库零资产）走完整链路（SHA-256 计算 → 登记表 grep 门禁 → 比较命令执行 → 报告），实测覆盖 8 条路径（selfcheck PASS / 无参数 SKIPPED / 模型不存在 SKIPPED / 哈希未登记 FAIL / 登记表缺失 FAIL / 比较失败 FAIL / 比较通过 PASS / 无 `--compare` SKIPPED）。`tools/verify.sh` 将 selfcheck 设为强制步骤；CI 增加 `meta-contract` job 运行 `tools/verify.sh --no-native`（0/78 均按成功）。**边界声明**：selfcheck 只证明 runner 契约可跑通，**不**证明与外部运行时的数值一致。
+**验收**：T-W5-1 有模型→差分报告与哈希登记（**机制已闭环 ✓**：runner 全链路已由 selfcheck 端到端验证；真实模型差分仍须用户提供仓库外合法模型，属用户侧可选）；T-W5-2 无模型→显式 SKIPPED（✓ 实测 78）；T-W5-3 哈希不符拒绝执行（✓ 实测 1）；T-W5-4 SKIPPED 不进通过计数（✓）。
 
 ### W6 异步后端门面（裁决 A 已落地，P2/M）
 
@@ -250,8 +251,8 @@ M4（已落地 2026-11-17）         W6 异步后端门面（A：新 trait + 新
 
 - [x] 新增 API 与 mbti 草案一致（偏差回写本文；W4 落地版在草案基础上补 `roi_*` 四字段，已回写）；零新增错误变体（仍 8 个）
 - [x] 快照 diff 纯加法（或空），CHANGELOG 已登记（W1/W2/W3 空；W4/W6 纯加法）
-- [x] `T-W*-*` 验收全绿（W1/W2/W3/W4/W5-A/W6-A）；`#skip` 为 0、无冒充通过
-- [x] 五门禁全绿；无 CLI 契约意外引入（现状为模板 main）
+- [x] `T-W*-*` 验收全绿（W1/W2/W3/W4/W5-A/W6-A；T-W5-1 以 `--selfcheck` 收口其**机制**，真实模型差分留用户侧）；`#skip` 为 0、无冒充通过
+- [x] 五门禁全绿；无 CLI 契约意外引入（现状为模板 main）；CI 双 job（`five-gates` + `meta-contract`）
 - [x] 防火墙回归：新函数/新包合入后旧 API 在既有语料上输出逐字节不变、旧用例零改动全绿（W2/W3/W4 均确认）
 - [x] 畸形输入（非有限候选、极端尺寸、截断/变异张量）无 panic、无越界（W3 加固 + W2 扫描）
 - [x] 零新第三方依赖；零许可不明二进制入库
@@ -265,6 +266,7 @@ M4（已落地 2026-11-17）         W6 异步后端门面（A：新 trait + 新
 | 浮点跨目标差异使 wasm/native 逐字节 golden 无法统一 | 中 | W2 先定位差异来源再定容差；容差口径写入测试文档 §5，不静默放宽 |
 | `pub(all) PoseCandidate` 允许外部构造非有限值，加固后可能改变下游行为 | 中 | W3 按 fail-closed 例外流程：CHANGELOG 显式登记 + 回归只影响异常样本；合法输入输出不变 |
 | ROI 扩展被误做成对旧 `detect` 的语义修改 | 高 | W4 强制新类型新函数防火墙 + T-W4-3 逐字节回归 + 快照纯加法门禁 |
-| 真实模型/外部运行时差分触碰许可与零依赖红线 | 高 | W5 仅脚本层 + 本地路径 + 哈希 + 显式 SKIPPED；未裁决前不启动 |
+| 真实模型/外部运行时差分触碰许可与零依赖红线 | 高 | W5 仅脚本层 + 本地路径 + 哈希 + 显式 SKIPPED（已落地；`--selfcheck` 只验机制、不伪造数值结论）；真实差分留待用户提供仓库外合法模型 |
+| 新增 `meta-contract` CI job 在 GitHub Actions 上的行为未实跑验证 | 低 | 与既有 `five-gates` job 完全隔离（互不替代、互不影响）；`--no-native` 规避 runner C 工具链不确定性；脚本逻辑已本机等价实跑全绿，失败时 CI 会输出 `tools/verify.sh` 完整日志便于定位 |
 | 仓库外申报口径继续被当作事实引用 | 中 | 本文 §0 集中登记修正；产出文档只用泛称，不写路径、不回写 |
 | 异步后端诉求通过改 trait 落地造成破坏性变更 | 中 | W6 三选项冻结；未裁决前 `PoseBackend` 方法集零改动 |

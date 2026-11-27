@@ -29,23 +29,25 @@ Five gates (wasm):
 - W3 (M1, P1, LANDED 2026-11-27): fail-closed input hardening. B22 (nms non-finite), B23 (Int32 overflow, max_poses budget). No API. T-W3-1..5. max_poses_upper_bound=65536; Int64 in letterbox length/plan/sample + detect_multi budget. Commit b31766d.
 - W2 (M2, P1, LANDED 2026-11-27): contract golden + dual-target equivalence. B4,B24. No API. T-W2-1..6. New `pose_golden_test.mbt` (8 golden), `tests/golden/README.md` registry, `pose_wbtest.mbt` truncation/mutation scans (1000 mutants, seeds 0x9E3779B97F4A7C15 / 0xD1B54A32D192ED03), `tools/verify.sh`.
 - W4 (M2, P2, LANDED 2026-11-27): ROI firewall extension. B16 (partial). Additive API: `RoiRect`, `RoiTransform` (11 fields), `letterbox_roi`, `detect_roi`, `PoseResult::restore_roi`. T-W4-1..5. 9 tests. `letterbox_roi` is aspect-preserving only (detect_roi dispatches both modes).
-- W5 (landed, P2): external oracle runner. `tools/numeric-oracle.sh` + `.sha256`. Acceptance T-W5-1..4. (Done: SKIPPED 78 path verified.)
+- W5 (landed + closed 2026-11-27, P2): external oracle runner. `tools/numeric-oracle.sh` + `.sha256`. T-W5-1..4. **T-W5-1 closed mechanically**: `--selfcheck` exercises the full contract (hash → registry gate → compare → report) with a deterministic self-produced probe; 8 paths verified (PASS 0 / SKIP 78 ×3 / FAIL 1 ×3 / PASS 0). Real model diff remains user-side (license red line), explicitly SKIPPED.
 - W6 (landed, P2): async facade. AsyncPoseBackend + detect_async/detect_multi_async. Acceptance T-W6-1..3. (Done.)
 
 ## Milestones
 - M0: W1 — LANDED
 - M1: W3 — LANDED
 - M2: W2 (golden + dual-target) — LANDED; W4 (ROI) — LANDED
+- Close-out: W5 `--selfcheck` + scan negative control + CI `meta-contract` job — LANDED 2026-11-27
 - ALL WORK PACKAGES W1–W6 DELIVERED 2026-11-27
 
 ## Measured state (verified 2026-11-27)
-- HEAD: af74b8c (W2) → W4 commit pending
-- `moon test`: 87/87 (wasm) and 87/87 (native), 0 skip
-- All five gates green; `bash tools/verify.sh` → exit 78 = all green except oracle SKIPPED
-- Snapshot: W4 diff is pure addition (5 new pub decls: detect_roi, letterbox_roi, restore_roi, RoiRect, RoiTransform); error variants still 8
+- HEAD: 6b7ffc5/f3fd66f (W4) → close-out commit pending
+- `moon test`: 88/88 (wasm) and 88/88 (native), 0 skip
+- All five gates green; `bash tools/verify.sh` → exit 78 = all green except real oracle diff SKIPPED (oracle `--selfcheck` PASS)
+- Snapshot: W4 pure addition (5 new pub decls); error variants still 8; close-out adds no pub (snapshot unchanged)
 - core.autocrlf=true; `git diff` empty after `moon info`; `.mbti` `M` status is EOL/stat noise
-- Test files: pose_test.mbt (40), pose_golden_test.mbt (8), pose_async_test.mbt (2 async), pose_roi_test.mbt (9), pose_wbtest.mbt (28) = 87
-- `docs/CHANGELOG.md` has W1 + W3 + W2 + W4 entries
+- Test files: pose_test.mbt (40), pose_golden_test.mbt (8), pose_async_test.mbt (2 async), pose_roi_test.mbt (9), pose_wbtest.mbt (29) = 88
+- CI: `five-gates` + `meta-contract` jobs (the latter runs `tools/verify.sh --no-native`, accepts rc 0/78)
+- `docs/CHANGELOG.md` has 历史补登 (W5-A/W6-A) + W1 + W3 + W2 + W4 + W5 收口 entries
 
 ## Next milestone
-None — all work packages delivered. Remaining optional external work: run `tools/numeric-oracle.sh` with a legal out-of-repo model to record a real <1e-4 diff (explicitly SKIPPED by default).
+None — all work packages delivered. Only externally-blocked optional work: run `tools/numeric-oracle.sh --model <legal out-of-repo model> --compare "<comparator>"` to record a real <1e-4 diff.

@@ -3,6 +3,31 @@
 > 本文件登记每一次公开可见的变更：日期 / 工作包 / 新增 pub 声明 / 快照 diff 结论 / 测试增量。
 > 仓库外申报口径（不在本仓库内的申报材料）一律不回写，仅以泛称描述差异。
 
+## 历史补登 · CHANGELOG 建立前的已落地工作包（2026-11-17）
+
+> 本登记簿于 W1 建立（2026-11-27）。W5-A、W6-A 在此前已由用户裁决落地，特此补登以保持
+> 「每包有记录」的完整性；事实口径以本仓库 git 实测与 `pkg.generated.mbti` 为准。
+
+### W5-A · 外部运行时数值 oracle runner（2026-11-17）
+
+- **工作包**：W5-A（P2/L，dev-plan §5 W5，裁决 A）。
+- **新增 pub 声明**：无（仅脚本层）。
+- **快照 diff**：空。
+- **测试增量**：0（脚本层 SKIPPED 不计入 `moon test` 通过数）。
+- **要点**：新建 `tools/numeric-oracle.sh` + `tools/numeric-oracle.sha256`（默认仅注释、零条目）。只接受仓库外本地模型路径 + SHA-256 登记；哈希不符拒绝执行；缺模型/缺比较命令显式 SKIPPED（退出码 78）；真实结论永不进入通过计数。
+- **仓库外申报口径**：不回写。
+
+### W6-A · 异步后端门面（2026-11-17）
+
+- **工作包**：W6-A（P2/M，dev-plan §5 W6，裁决 A）。
+- **新增 pub 声明**：`pub(open) trait AsyncPoseBackend`、`pub async fn detect_async(...)`、`pub async fn detect_multi_async(...)`（纯加法）。
+- **快照 diff**：纯加法（+7 行）。
+- **测试增量**：+2（`moon test` 62/62 → 64/64；异步防火墙：与同步入口逐字段等价）。
+- **要点**：旧 `PoseBackend` 方法集与 `detect`/`detect_multi` 零改动、逐字节不变；零新错误变体（仍 8 个）；未引入 async 运行时依赖。
+- **仓库外申报口径**：不回写。
+
+---
+
 ## W1 · 漂移清理与自包含（2026-11-27）
 
 - **工作包**：W1（P0/S，dev-plan §5 W1）。
@@ -26,17 +51,6 @@
   - `detect_multi` 预算改为 `block.to_int64() * max_poses.to_int64()`，并在 `validate_spec_and_config` 与 `nms` 增加 `max_poses` 上界（`max_poses_upper_bound = 65536`）拒绝极端值（关闭预算回绕成负值）。
   - 仅非有限候选 / 极端尺寸 / 极端 `max_poses` 样本改变行为；原 62 用例零改动全绿（防火墙）。
 - **仓库外申报口径**：不回写；仅记录本仓库 git 实测。
-
----
-
-<!-- 后续工作包在此追加登记。模板： -->
-<!--
-## W? · 标题（YYYY-MM-DD）
-- 新增 pub 声明：...
-- 快照 diff：...
-- 测试增量：...
-- 要点：...
--->
 
 ---
 
@@ -76,3 +90,30 @@
   - 防火墙：旧 `detect`/`detect_multi`/`letterbox`/`letterbox_stretch`/`restore`/`restore_stretch` 零改动，原 78 用例零改动全绿（T-W4-3）。
 - **已登记限制**：`letterbox_roi` 仅承载等比模式（非等比 ROI 请用 `detect_roi`，它按 `keep_aspect_ratio` 分派两种模式）。
 - **仓库外申报口径**：不回写；仅记录本仓库 git 实测。
+
+---
+
+## W5 收口 · oracle runner 机制自检与元契约自动化（2026-11-27）
+
+- **工作包**：W5（T-W5-1 收口）+ W2 元契约补强 + CI 接线。
+- **新增 pub 声明**：无（`pkg.generated.mbti` 与 `cmd/main` 快照 diff 均为空）。
+- **快照 diff**：空。
+- **测试增量**：+1（`moon test` 87/87 → 88/88，零 `#skip`；wasm/native 双目标各 88/88）。
+- **要点**：
+  - **`tools/numeric-oracle.sh --selfcheck`（T-W5-1 机制收口）**：用**确定性自产探针**（临时目录内固定 ASCII 字节，非第三方模型、入库零资产）走完整链路——SHA-256 计算 → 登记表 `grep` 门禁 → 比较命令执行 → 报告，证明 runner **契约**可跑通。八条路径已实测：selfcheck PASS(0)、无参数 SKIPPED(78)、模型不存在 SKIPPED(78)、哈希未登记 FAIL(1)、登记表缺失 FAIL(1)、比较失败 FAIL(1)、比较通过 PASS(0)、哈希门禁过但无 `--compare` SKIPPED(78)。
+    - **边界声明（不自欺）**：selfcheck **不**证明与任何推理运行时的数值一致；与外部运行时的 <1e-4 真实差分仍需用户提供仓库外合法模型，属许可红线内的用户侧可选步骤，默认显式 SKIPPED。
+  - **`tools/verify.sh` 接入 selfcheck（强制步骤）**：元契约新增 `W5-6a`，runner 机制不可用即红；`W5-6b` 保留真实差分为可缺省步骤。整体退出码语义不变（0=全绿含真实差分；78=除真实差分外全绿且已显式 SKIPPED；1=失败）。
+  - **扫描器负对照测试（+1）**：`decode_capture_allowed` 的允许集合判定加负对照——集合内 4 变体判 true，集合外 4 变体（`BackendNotOpen`/`InvalidInput`/`UnsupportedModel`/`BackendFailure`）必须判 false，成功路径判 true。证明「截断/变异扫描全绿」不是断言空转。
+  - **CI 新增 `meta-contract` job**：`bash tools/verify.sh --no-native`，退出码 0/78 均按成功（78 = 真实差分显式 SKIPPED），其余按失败。与既有 `five-gates` job 互不替代。native 双目标等价因依赖 runner 主机 C 工具链、尚未在 GitHub Actions 实跑验证，故 CI 用 `--no-native` 跳过（本机等价实跑已通过）。
+- **仓库外申报口径**：不回写；仅记录本仓库 git 实测。
+
+---
+
+<!-- 后续工作包在此追加登记。模板： -->
+<!--
+## W? · 标题（YYYY-MM-DD）
+- 新增 pub 声明：...
+- 快照 diff：...
+- 测试增量：...
+- 要点：...
+-->

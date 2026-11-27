@@ -51,5 +51,12 @@ golden 都必须在 `pose_golden_test.mbt` / `pose_wbtest.mbt` 中被**真实断
 
 ## 4. 计数口径
 
-`moon test` = **87** 条（W2 前 67 → W2 后 78 → W4 后 87；W2 新增 11：截断 1 + 变异 2 + golden 8；
-W4 新增 9 条 ROI 用例），零 `#skip`；wasm / native 双目标各 87/87。计数以 `moon test` 实测为准，易漂移。
+`moon test` = **88** 条（W2 前 67 → W2 后 78 → W4 后 87 → 收口后 88；W2 新增 11：截断 1 + 变异 2 + golden 8；
+W4 新增 9 条 ROI 用例；收口新增 1 条扫描器负对照），零 `#skip`；wasm / native 双目标各 88/88。计数以 `moon test` 实测为准，易漂移。
+
+## 5. 扫描器负对照（防断言空转）
+
+`pose_wbtest.mbt` 的「扫描器负对照：允许集合外变体必须判 false」断言 `decode_capture_allowed`
+的判定不是恒真：允许集合内 4 变体（`OutputDecode`/`ShapeMismatch`/`InvalidConfig`/`BudgetExceeded`）
+判 true，集合外 4 变体（`BackendNotOpen`/`InvalidInput`/`UnsupportedModel`/`BackendFailure`）
+必须判 false，成功路径判 true。这样「截断/变异扫描全绿」才有意义。

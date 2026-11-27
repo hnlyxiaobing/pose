@@ -1,7 +1,7 @@
 # pose · 姿态估计门面
 
 > 独立发布单元 ｜ L3 感知绑定 ｜ `preferred_target = wasm` ｜ Apache-2.0
-> 状态：`moon test` **87/87** 通过（2026-11-27 本机实测，wasm/native 双目标各 87/87，含异步门面 2 条、ROI 9 条、golden/扫描 11 条）；带日期的开发/测试文档见 `docs/`，本文件是唯一入口文档。
+> 状态：`moon test` **88/88** 通过（2026-11-27 本机实测，wasm/native 双目标各 88/88，含异步门面 2 条、ROI 9 条、golden/扫描 11 条、扫描器负对照 1 条）；带日期的开发/测试文档见 `docs/`，本文件是唯一入口文档。
 > 公开 API 以 `pkg.generated.mbti` 为准（由 `moon info` 生成，禁手工编辑）；加法性变更须登记 `docs/CHANGELOG.md` + 快照审阅 + 快照门禁。
 
 ## 1. 定位与边界
@@ -88,13 +88,14 @@ pub(open) trait AsyncPoseBackend {
 
 - 本库无 CLI；`cmd/main` 为模板。
 - 复验：`moon clean` → `moon check --deny-warn` → `moon build` → `moon test` → `moon fmt --check` → `moon info` 后检查 `pkg.generated.mbti` 无意外 diff。
-- 单一入口（推荐）：`bash tools/verify.sh` —— 仓库自包含地串起五门禁 + `moon test --target native` 双目标等价 + 截断/变异自检 + 错误簿记 8/8 + 引用实存性；外部推理运行时 oracle 缺失时显式 SKIPPED（整体退出码 78 = 除 oracle 外全绿，不计入通过），`--no-native` 可跳过双目标步。
+- 单一入口（推荐）：`bash tools/verify.sh` —— 仓库自包含地串起五门禁 + `moon test --target native` 双目标等价 + 截断/变异自检 + 错误簿记 8/8 + 引用实存性 + oracle runner 机制自检（`--selfcheck`，强制）；真实模型差分缺失时显式 SKIPPED（整体退出码 78 = 除真实差分外全绿，不计入通过），`--no-native` 可跳过双目标步。
+- CI 两个 job：`five-gates`（五道合入门禁）与 `meta-contract`（`tools/verify.sh --no-native`；退出码 0/78 均按成功）。
 - 本仓库为独立 Git 仓库，文档与 CI 均自包含，不依赖工作区其他目录。
 
 ## 6. 风险与未决
 
 - ROI crop 接口已交付（W4，`RoiRect`/`letterbox_roi`/`detect_roi`/`restore_roi`）；`letterbox_roi` 仅承载等比模式（非等比 ROI 用 `detect_roi`，它按 `keep_aspect_ratio` 分派）。
-- 与外部推理运行时的 <1e-4 逐元素数值对齐：runner 已建（`tools/numeric-oracle.sh`，仓库外模型路径 + SHA-256 门禁），但本机无外部模型/运行时，真实差分未跑（缺失时显式 SKIPPED，不计入通过）。
+- 与外部推理运行时的 <1e-4 逐元素数值对齐：runner 已建（`tools/numeric-oracle.sh`，仓库外模型路径 + SHA-256 门禁），runner 契约已由 `--selfcheck`（确定性自产探针）端到端验证；但本机无外部模型/运行时，**真实差分未跑**（缺省显式 SKIPPED，不计入通过；`--selfcheck` 不产生数值一致性结论）。
 
 ## 7. 文档索引（`docs/`）
 

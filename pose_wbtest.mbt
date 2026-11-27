@@ -758,3 +758,78 @@ test "letterbox: 极端尺寸图像报 InvalidInput（T-W3-2 Int64 长度校验�
   }
   assert_true(r, msg="extreme-size image must be rejected as InvalidInput")
 }
+
+///|
+/// 扫描器负对照（防断言空转）：证明 `decode_capture_allowed` 的允许集合判定
+/// 不是恒真。允许集合内 4 个变体判 true，集合外 4 个变体必须判 false，
+/// 成功路径判 true。这样「截断/变异扫描全绿」才有意义。
+test "扫描器负对照：允许集合外变体必须判 false（防断言空转）" {
+  fn raise_eod() -> Unit raise PoseError {
+    raise OutputDecode("x")
+  }
+
+  fn raise_sm() -> Unit raise PoseError {
+    raise ShapeMismatch(1, 2)
+  }
+
+  fn raise_ic() -> Unit raise PoseError {
+    raise InvalidConfig("x")
+  }
+
+  fn raise_be() -> Unit raise PoseError {
+    raise BudgetExceeded("x")
+  }
+
+  fn raise_bno() -> Unit raise PoseError {
+    raise BackendNotOpen("x")
+  }
+
+  fn raise_ii() -> Unit raise PoseError {
+    raise InvalidInput(0, 0)
+  }
+
+  fn raise_um() -> Unit raise PoseError {
+    raise UnsupportedModel("x")
+  }
+
+  fn raise_bf() -> Unit raise PoseError {
+    raise BackendFailure("a", "b")
+  }
+
+  // 允许集合内：判 true
+  assert_true(
+    decode_capture_allowed(raise_eod),
+    msg="OutputDecode 属允许集合",
+  )
+  assert_true(
+    decode_capture_allowed(raise_sm),
+    msg="ShapeMismatch 属允许集合",
+  )
+  assert_true(
+    decode_capture_allowed(raise_ic),
+    msg="InvalidConfig 属允许集合",
+  )
+  assert_true(
+    decode_capture_allowed(raise_be),
+    msg="BudgetExceeded 属允许集合",
+  )
+  // 集合外：必须判 false（负对照）
+  assert_true(
+    !decode_capture_allowed(raise_bno),
+    msg="BackendNotOpen 不在允许集合，必须判 false",
+  )
+  assert_true(
+    !decode_capture_allowed(raise_ii),
+    msg="InvalidInput 不在允许集合，必须判 false",
+  )
+  assert_true(
+    !decode_capture_allowed(raise_um),
+    msg="UnsupportedModel 不在允许集合，必须判 false",
+  )
+  assert_true(
+    !decode_capture_allowed(raise_bf),
+    msg="BackendFailure 不在允许集合，必须判 false",
+  )
+  // 成功路径：判 true
+  assert_true(decode_capture_allowed(() => 1), msg="成功路径判 true")
+}
